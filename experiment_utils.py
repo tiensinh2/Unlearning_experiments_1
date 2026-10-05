@@ -1,0 +1,478 @@
+"""
+Shared core utilities for Representation-Level Class Unlearning Experiment:
+- ResNet-18 Backbone & Split Architectures (Encoder + Linear / CMF Head)
+- Class-wise and Whole-Class Retain/Forget Split partitioning and persistence
+- Three-tier Evaluation Metrics: Output Accuracy, Linear Probe (LP), Nearest Class Center (NCC)
+- Illusion Gap Computation: max(LP_f - Output_f, 0) and max(NCC_f - Output_f, 0)
+"""
+
+from typing import Dict, List, Optional, Tuple, Union
+import json
+import os
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+from torch.utils.data import DataLoader, Dataset, Subset
+from torchvision import datasets, transforms
+from torchvision.models import resnet18, ResNet18_Weights
+from sklearn.linear_model import LogisticRegression
+import numpy as np
+
+
+# ==============================================================================
+# 1. Modular Model Architecture (Encoder + Classifier Head)
+# ==============================================================================
+
+class ResNet18Backbone(nn.Module):
+    """
+    Standard ResNet-18 feature encoder returning a d-dimensional representation (512-dim).
+    """
+    def __init__(self, pretrained: bool = False, in_channels: int = 3):
+        super().__init__()
+        weights = ResNet18_Weights.DEFAULT if pretrained else None
+        base_resnet = resnet18(weights=weights)
+        
+        if in_channels != 3:
+            base_resnet.conv1 = nn.Conv2d(
+                in_channels, 64, kernel_size=7, stride=2, padding=3, bias=False
+            )
+
+        self.conv1 = base_resnet.conv1
+        self.bn1 = base_resnet.bn1
+        self.relu = base_resnet.relu
+        self.maxpool = base_resnet.maxpool
+        self.layer1 = base_resnet.layer1
+        self.layer2 = base_resnet.layer2
+        self.layer3 = base_resnet.layer3
+        self.layer4 = base_resnet.layer4
+        self.avgpool = base_resnet.avgpool
+        self.feature_dim = 512
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        x = self.conv1(x)
+        x = self.bn1(x)
+        x = self.relu(x)
+        x = self.maxpool(x)
+
+        x = self.layer1(x)
+        x = self.layer2(x)
+        x = self.layer3(x)
+        x = self.layer4(x)
+
+        x = self.avgpool(x)
+        features = torch.flatten(x, 1)
+        return features
+
+
+class ClassifierHead(nn.Module):
+    """Linear classifier head W * h + b."""
+    def __init__(self, in_features: int = 512, num_classes: int = 10, bias: bool = True):
+        super().__init__()
+        self.linear = nn.Linear(in_features, num_classes, bias=bias)
+
+    def forward(self, features: torch.Tensor) -> torch.Tensor:
+        return self.linear(features)
+
+
+class FullClassifier(nn.Module):
+    """End-to-end model comprising encoder + classifier head."""
+    def __init__(self, encoder: nn.Module, head: nn.Module):
+        super().__init__()
+        self.encoder = encoder
+        self.head = head
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        feats = self.encoder(x)
+        return self.head(feats)
+
+    def get_features(self, x: torch.Tensor) -> torch.Tensor:
+        return self.encoder(x)
+
+
+class ViT11MBackbone(nn.Module):
+    """
+    Vision Transformer (ViT-11M / ViT-Tiny variant for 32x32 / small image benchmarks).
+    Image size: 32x32 (or resized), Patch size: 4x4, Embed dim: 384, Depth: 6 layers, Heads: 6.
+    Output feature dimension: 384.
+    """
+    def __init__(self, in_channels: int = 3, img_size: int = 32, patch_size: int = 4, embed_dim: int = 384, depth: int = 6, num_heads: int = 6):
+        super().__init__()
+        self.img_size = img_size
+        self.patch_size = patch_size
+        self.num_patches = (img_size // patch_size) ** 2
+        self.feature_dim = embed_dim
+
+        self.patch_embed = nn.Conv2d(in_channels, embed_dim, kernel_size=patch_size, stride=patch_size)
+        self.cls_token = nn.Parameter(torch.zeros(1, 1, embed_dim))
+        self.pos_embed = nn.Parameter(torch.zeros(1, self.num_patches + 1, embed_dim))
+        self.pos_drop = nn.Dropout(p=0.0)
+
+        encoder_layer = nn.TransformerEncoderLayer(
+            d_model=embed_dim, nhead=num_heads, dim_feedforward=embed_dim * 4,
+            dropout=0.0, activation="gelu", batch_first=True, norm_first=True
+        )
+        self.transformer = nn.TransformerEncoder(encoder_layer, num_layers=depth)
+        self.norm = nn.LayerNorm(embed_dim)
+        nn.init.trunc_normal_(self.pos_embed, std=0.02)
+        nn.init.trunc_normal_(self.cls_token, std=0.02)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        B = x.shape[0]
+        x = self.patch_embed(x).flatten(2).transpose(1, 2)
+        cls_tokens = self.cls_token.expand(B, -1, -1)
+        x = torch.cat((cls_tokens, x), dim=1)
+        x = self.pos_drop(x + self.pos_embed)
+        x = self.transformer(x)
+        x = self.norm(x)
+        return x[:, 0]  # CLS token feature
+
+
+def build_resnet18_classifier(num_classes: int = 10, in_channels: int = 3, pretrained: bool = False) -> FullClassifier:
+    encoder = ResNet18Backbone(pretrained=pretrained, in_channels=in_channels)
+    head = ClassifierHead(in_features=encoder.feature_dim, num_classes=num_classes)
+    return FullClassifier(encoder, head)
+
+
+def build_vit11m_classifier(num_classes: int = 10, in_channels: int = 3, img_size: int = 32) -> FullClassifier:
+    encoder = ViT11MBackbone(in_channels=in_channels, img_size=img_size)
+    head = ClassifierHead(in_features=encoder.feature_dim, num_classes=num_classes)
+    return FullClassifier(encoder, head)
+
+
+def build_classifier(model_name: str = "resnet18", num_classes: int = 10, in_channels: int = 3, img_size: int = 32) -> FullClassifier:
+    model_name = model_name.lower().replace("-", "").replace("_", "")
+    if model_name in ["resnet18", "resnet"]:
+        return build_resnet18_classifier(num_classes=num_classes, in_channels=in_channels)
+    elif model_name in ["vit11m", "vit"]:
+        return build_vit11m_classifier(num_classes=num_classes, in_channels=in_channels, img_size=img_size)
+    else:
+        raise ValueError(f"Unsupported model architecture: {model_name}")
+
+
+MODEL_CONFIGS = {
+    "mnist": {
+        "unlearners": ["original", "naive"],
+        "num_epochs": 50,
+        "batch_size": 256,
+        "lr": 0.1,
+        "models": ["resnet18", "vit11m"],
+        "model_seeds": [0, 1, 2, 3, 4, 5, 6, 7, 8, 9],
+    },
+    "fashion_mnist": {
+        "unlearners": ["original", "naive"],
+        "num_epochs": 50,
+        "batch_size": 256,
+        "lr": 0.1,
+        "models": ["resnet18", "vit11m"],
+        "model_seeds": [0, 1, 2, 3, 4, 5, 6, 7, 8, 9],
+    },
+    "cifar10": {
+        "unlearners": ["original", "naive"],
+        "num_epochs": 182,
+        "batch_size": 256,
+        "lr": 0.1,
+        "models": ["resnet18", "vit11m"],
+        "model_seeds": [0, 1, 2],
+    },
+    "cifar100": {
+        "unlearners": ["original", "naive"],
+        "num_epochs": 182,
+        "batch_size": 256,
+        "lr": 0.1,
+        "models": ["resnet18", "vit11m"],
+        "model_seeds": [0, 1, 2, 3, 4, 5, 6, 7, 8, 9],
+    },
+    "utkface": {
+        "unlearners": ["original", "naive"],
+        "num_epochs": 50,
+        "batch_size": 256,
+        "lr": 0.1,
+        "models": ["resnet18", "vit11m"],
+        "model_seeds": [0, 1, 2, 3, 4, 5, 6, 7, 8, 9],
+    },
+}
+
+
+# ==============================================================================
+# 2. Dataset Partitioning & Whole-Class Retain/Forget Split
+# ==============================================================================
+
+class IndexedDataset(Dataset):
+    """Wrapper that applies transform dynamically."""
+    def __init__(self, dataset: Dataset, transform=None):
+        self.dataset = dataset
+        self.transform = transform
+
+    def __getitem__(self, idx: int):
+        x, y = self.dataset[idx]
+        if self.transform is not None:
+            x = self.transform(x)
+        return x, y
+
+    def __len__(self) -> int:
+        return len(self.dataset)
+
+
+def get_dataset_transforms(dataset_name: str = "cifar10"):
+    dataset_name = dataset_name.lower().replace("-", "_")
+    if dataset_name == "cifar10":
+        mean, std = [0.4919, 0.4822, 0.4465], [0.2023, 0.1994, 0.2010]
+        train_tf = transforms.Compose([
+            transforms.RandomCrop(32, padding=4),
+            transforms.RandomHorizontalFlip(0.5),
+            transforms.ToTensor(),
+            transforms.Normalize(mean=mean, std=std),
+        ])
+        eval_tf = transforms.Compose([
+            transforms.Resize((32, 32)),
+            transforms.ToTensor(),
+            transforms.Normalize(mean=mean, std=std),
+        ])
+    elif dataset_name == "cifar100":
+        mean, std = [0.5071, 0.4865, 0.4409], [0.2673, 0.2564, 0.2762]
+        train_tf = transforms.Compose([
+            transforms.RandomCrop(32, padding=4),
+            transforms.RandomHorizontalFlip(0.5),
+            transforms.ToTensor(),
+            transforms.Normalize(mean=mean, std=std),
+        ])
+        eval_tf = transforms.Compose([
+            transforms.Resize((32, 32)),
+            transforms.ToTensor(),
+            transforms.Normalize(mean=mean, std=std),
+        ])
+    else:
+        mean, std = [0.5, 0.5, 0.5], [0.5, 0.5, 0.5]
+        train_tf = transforms.Compose([transforms.ToTensor(), transforms.Normalize(mean=mean, std=std)])
+        eval_tf = transforms.Compose([transforms.ToTensor(), transforms.Normalize(mean=mean, std=std)])
+    return train_tf, eval_tf
+
+
+def create_and_persist_splits(
+    dataset_name: str = "cifar10",
+    root: str = "./data",
+    seed: int = 123,
+    save_dir: str = "./artifacts/splits",
+) -> Dict[str, Union[List[int], str, int]]:
+    """
+    Creates and persists deterministic dataset split exactly according to data_instruction.md:
+    D_dev -> D (85%, 42500) and D_V (15%, 7500)
+    D -> D_R (90%, 38250) and D_F (10%, 4250)
+    D_T (10000)
+    """
+    os.makedirs(save_dir, exist_ok=True)
+    split_filename = os.path.join(save_dir, f"{dataset_name}_seed_{seed}_split.json")
+
+    if os.path.exists(split_filename):
+        with open(split_filename, "r") as f:
+            return json.load(f)
+
+    if dataset_name.lower() == "cifar10":
+        raw_train = datasets.CIFAR10(root=root, train=True, download=True)
+        raw_test = datasets.CIFAR10(root=root, train=False, download=True)
+        train_size, val_size = 42500, 7500
+        retain_size, forget_size = 38250, 4250
+    elif dataset_name.lower() == "cifar100":
+        raw_train = datasets.CIFAR100(root=root, train=True, download=True)
+        raw_test = datasets.CIFAR100(root=root, train=False, download=True)
+        train_size, val_size = 42500, 7500
+        retain_size, forget_size = 38250, 4250
+    elif dataset_name.lower() == "mnist":
+        raw_train = datasets.MNIST(root=root, train=True, download=True)
+        raw_test = datasets.MNIST(root=root, train=False, download=True)
+        train_size, val_size = 51000, 9000
+        retain_size, forget_size = 45900, 5100
+    elif dataset_name.lower() == "fashion_mnist":
+        raw_train = datasets.FashionMNIST(root=root, train=True, download=True)
+        raw_test = datasets.FashionMNIST(root=root, train=False, download=True)
+        train_size, val_size = 51000, 9000
+        retain_size, forget_size = 45900, 5100
+    else:
+        raise ValueError(f"Unsupported dataset: {dataset_name}")
+
+    # 1. Deterministic Dev -> Train (D) & Validation (D_V)
+    gen = torch.Generator().manual_seed(seed)
+    dev_perm = torch.randperm(len(raw_train), generator=gen).tolist()
+    train_indices = dev_perm[:train_size]
+    val_indices = dev_perm[train_size:train_size + val_size]
+    test_indices = list(range(len(raw_test)))
+
+    # 2. Deterministic Train (D) -> Retain (D_R) & Forget (D_F) (90% / 10%)
+    train_perm = torch.randperm(len(train_indices), generator=gen).tolist()
+    train_r_indices = [train_indices[i] for i in train_perm[:retain_size]]
+    train_f_indices = [train_indices[i] for i in train_perm[retain_size:]]
+
+    # Validate disjoint assertions
+    assert len(set(train_indices).intersection(set(val_indices))) == 0
+    assert len(train_indices) + len(val_indices) == len(raw_train)
+    assert len(set(train_r_indices).intersection(set(train_f_indices))) == 0
+    assert len(train_r_indices) + len(train_f_indices) == len(train_indices)
+    assert len(train_r_indices) == retain_size
+    assert len(train_f_indices) == forget_size
+
+    split_artifact = {
+        "dataset_name": dataset_name,
+        "seed": seed,
+        "train_indices": train_indices,
+        "val_indices": val_indices,
+        "test_indices": test_indices,
+        "train_r_indices": train_r_indices,
+        "train_f_indices": train_f_indices,
+    }
+
+    with open(split_filename, "w") as f:
+        json.dump(split_artifact, f)
+
+    return split_artifact
+
+
+# ==============================================================================
+# 3. Three-Tier Evaluation: Output, Linear Probe (LP), Nearest Class Center (NCC)
+# ==============================================================================
+
+@torch.no_grad()
+def extract_features(
+    encoder: nn.Module,
+    dataloader: DataLoader,
+    device: str = "cuda"
+) -> Tuple[np.ndarray, np.ndarray]:
+    """
+    Extracts features with encoder in eval() mode and no_grad.
+    """
+    encoder.eval()
+    all_feats = []
+    all_targets = []
+
+    for images, targets in dataloader:
+        images = images.to(device)
+        feats = encoder(images)
+        all_feats.append(feats.cpu().numpy())
+        all_targets.append(targets.numpy() if isinstance(targets, torch.Tensor) else np.array(targets))
+
+    return np.concatenate(all_feats, axis=0), np.concatenate(all_targets, axis=0)
+
+
+def compute_output_accuracy(
+    model: nn.Module,
+    dataloader: DataLoader,
+    device: str = "cuda"
+) -> float:
+    """Computes output accuracy (argmax of logits) in [0, 1]."""
+    model.eval()
+    correct = 0
+    total = 0
+
+    with torch.no_grad():
+        for images, targets in dataloader:
+            images = images.to(device)
+            targets = targets.to(device) if isinstance(targets, torch.Tensor) else torch.tensor(targets, device=device)
+            outputs = model(images)
+            preds = outputs.argmax(dim=1)
+            correct += (preds == targets).sum().item()
+            total += targets.size(0)
+
+    acc = correct / total if total > 0 else 0.0
+    assert 0.0 <= acc <= 1.0, f"Accuracy out of range [0, 1]: {acc}"
+    return float(acc)
+
+
+def compute_linear_probe_accuracy(
+    train_feats: np.ndarray,
+    train_targets: np.ndarray,
+    eval_feats: np.ndarray,
+    eval_targets: np.ndarray,
+    seed: int = 123
+) -> float:
+    """
+    Trains a fresh deterministic linear probe (Logistic Regression) on frozen training features
+    and evaluates accuracy on the target evaluation features.
+    """
+    if len(eval_feats) == 0:
+        return 0.0
+    clf = LogisticRegression(max_iter=1000, random_state=seed, solver="lbfgs")
+    clf.fit(train_feats, train_targets)
+    preds = np.array(clf.predict(eval_feats))
+    eval_targets_arr = np.array(eval_targets)
+    acc = float(np.mean(preds == eval_targets_arr))
+    assert 0.0 <= acc <= 1.0, f"LP Accuracy out of range [0, 1]: {acc}"
+    return acc
+
+
+def compute_ncc_accuracy(
+    train_feats: np.ndarray,
+    train_targets: np.ndarray,
+    eval_feats: np.ndarray,
+    eval_targets: np.ndarray,
+    num_classes: int = 10
+) -> float:
+    """
+    Nearest Class Center (NCC): computes class means from training features
+    and assigns evaluation samples to the nearest class mean.
+    """
+    if len(eval_feats) == 0:
+        return 0.0
+
+    class_means = []
+    for c in range(num_classes):
+        mask = (train_targets == c)
+        if mask.sum() > 0:
+            mean = train_feats[mask].mean(axis=0)
+        else:
+            mean = np.zeros(train_feats.shape[1])
+        class_means.append(mean)
+
+    class_means = np.stack(class_means, axis=0) # [C, D]
+
+    # Compute Euclidean distances from eval_feats to each class mean
+    dists = np.linalg.norm(eval_feats[:, None, :] - class_means[None, :, :], axis=2) # [N, C]
+    preds = np.argmin(dists, axis=1)
+    eval_targets_arr = np.array(eval_targets)
+    acc = float(np.mean(preds == eval_targets_arr))
+    assert 0.0 <= acc <= 1.0, f"NCC Accuracy out of range [0, 1]: {acc}"
+    return acc
+
+
+def evaluate_three_tier_metrics(
+    model: FullClassifier,
+    train_loader: DataLoader,
+    retain_eval_loader: DataLoader,
+    forget_eval_loader: DataLoader,
+    num_classes: int = 10,
+    seed: int = 123,
+    device: str = "cuda"
+) -> Dict[str, float]:
+    """
+    Evaluates Output, Linear Probe, and NCC accuracy for Retain and Forget subsets,
+    plus the Illusion Gap metrics.
+    """
+    # 1. Output Accuracies
+    out_r = compute_output_accuracy(model, retain_eval_loader, device=device)
+    out_f = compute_output_accuracy(model, forget_eval_loader, device=device)
+
+    # 2. Extract Features
+    train_feats, train_targets = extract_features(model.encoder, train_loader, device=device)
+    r_feats, r_targets = extract_features(model.encoder, retain_eval_loader, device=device)
+    f_feats, f_targets = extract_features(model.encoder, forget_eval_loader, device=device)
+
+    # 3. Linear Probe Accuracies
+    lp_r = compute_linear_probe_accuracy(train_feats, train_targets, r_feats, r_targets, seed=seed)
+    lp_f = compute_linear_probe_accuracy(train_feats, train_targets, f_feats, f_targets, seed=seed)
+
+    # 4. NCC Accuracies
+    ncc_r = compute_ncc_accuracy(train_feats, train_targets, r_feats, r_targets, num_classes=num_classes)
+    ncc_f = compute_ncc_accuracy(train_feats, train_targets, f_feats, f_targets, num_classes=num_classes)
+
+    # 5. Illusion Gap
+    gap_lp = max(lp_f - out_f, 0.0)
+    gap_ncc = max(ncc_f - out_f, 0.0)
+
+    return {
+        "output_retain": out_r,
+        "output_forget": out_f,
+        "lp_retain": lp_r,
+        "lp_forget": lp_f,
+        "ncc_retain": ncc_r,
+        "ncc_forget": ncc_f,
+        "illusion_gap_lp": gap_lp,
+        "illusion_gap_ncc": gap_ncc,
+    }
