@@ -31,16 +31,17 @@ def unlearn_scrub(
     lr: float = 1e-4,
     kd_T: float = 2.0,
     alpha: float = 0.5,
+    gamma: float = 1.0,
     momentum: float = 0.9,
     weight_decay: float = 5e-4,
     device: str = "cuda",
 ) -> nn.Module:
     """
-    SCRUB (Scalable Concept Removal Using Bad Teachers / Student-Teacher Distillation).
+    SCRUB (Student-Teacher Relabeling & Unlearning Bound).
     
-    Source: Kurmanji et al. (NeurIPS 2023).
-    - Maximizes KL divergence on forget set (for first msteps epochs).
-    - Minimizes KL divergence and Cross-Entropy loss on retain set.
+    Source: Kurmanji et al. (Towards Unbounded Machine Unlearning, NeurIPS 2023).
+    - Maximizes KL divergence on forget set (for the first msteps epochs): loss = -KL(student, teacher).
+    - Minimizes weighted combination on retain set: loss = gamma * CE(student, targets) + alpha * KL(student, teacher).
     """
     model.to(device)
     teacher = copy.deepcopy(model).eval()
@@ -71,14 +72,19 @@ def unlearn_scrub(
         # Phase 2: Minimize divergence & standard classification loss on Retain set
         student.train()
         for images, targets in retain_loader:
-            images, targets = images.to(device), targets.to(device)
+            images = images.to(device)
+            if not isinstance(targets, torch.Tensor):
+                targets = torch.tensor(targets, device=device)
+            else:
+                targets = targets.to(device)
+
             with torch.no_grad():
                 t_out = teacher(images)
             s_out = student(images)
 
             loss_cls = criterion_cls(s_out, targets)
             loss_div = criterion_kd(s_out, t_out)
-            loss_retain = alpha * loss_cls + (1.0 - alpha) * loss_div
+            loss_retain = gamma * loss_cls + alpha * loss_div
 
             optimizer.zero_grad()
             loss_retain.backward()

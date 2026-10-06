@@ -45,7 +45,10 @@ def generate_salun_mask(
 ) -> Dict[str, torch.Tensor]:
     """
     Computes weight saliency mask from the first-order gradient magnitude on the forget set.
-    Source: Fan et al., ICLR 2024 Spotlight (OPTML Group).
+    Source: Fan et al., ICLR 2024 Spotlight (OPTML Group/Unlearn-Saliency).
+    
+    Accumulates signed gradients across forget batches, takes element-wise absolute value,
+    and identifies the top-k percentile most salient parameters using argsort ranking.
     """
     model.eval()
     criterion = nn.CrossEntropyLoss()
@@ -61,17 +64,28 @@ def generate_salun_mask(
         with torch.no_grad():
             for name, param in model.named_parameters():
                 if param.grad is not None:
-                    gradients[name] += param.grad.data.abs()
+                    gradients[name] += param.grad.data
 
-    # Flatten and extract top-threshold mask
-    all_elements = torch.cat([g.flatten() for g in gradients.values()])
-    k = int(len(all_elements) * threshold)
-    threshold_val, _ = torch.kthvalue(all_elements, len(all_elements) - k + 1)
-
-    mask = {}
     with torch.no_grad():
-        for name, g in gradients.items():
-            mask[name] = (g >= threshold_val).float().to(device)
+        for name in gradients:
+            gradients[name] = torch.abs_(gradients[name])
+
+        # Concatenate all tensors and calculate positions
+        all_elements = -torch.cat([tensor.flatten() for tensor in gradients.values()])
+        threshold_index = int(len(all_elements) * threshold)
+
+        positions = torch.argsort(all_elements)
+        ranks = torch.argsort(positions)
+
+        mask = {}
+        start_index = 0
+        for name, tensor in gradients.items():
+            num_elements = tensor.numel()
+            tensor_ranks = ranks[start_index : start_index + num_elements]
+            threshold_tensor = torch.zeros_like(tensor_ranks, dtype=torch.float32)
+            threshold_tensor[tensor_ranks < threshold_index] = 1.0
+            mask[name] = threshold_tensor.reshape(tensor.shape).to(device)
+            start_index += num_elements
 
     return mask
 

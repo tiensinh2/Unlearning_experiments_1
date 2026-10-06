@@ -76,3 +76,95 @@ def test_core_modules_importable():
     assert hasattr(experiment_utils, "build_resnet18_classifier")
     assert hasattr(experiment_utils, "evaluate_three_tier_metrics")
     assert hasattr(data_loader, "get_unlearning_dataloaders")
+
+def test_unlearning_methods_smoke():
+    """Verify that all unlearning methods run a fast forward/backward pass without errors."""
+    import torch
+    import torch.nn as nn
+    from torch.utils.data import DataLoader, TensorDataset
+    from unlearning_methods import (
+        unlearn_random_label,
+        unlearn_neggrad_plus,
+        unlearn_salun,
+        unlearn_scrub,
+        unlearn_tarun_unsir,
+    )
+
+    device = "cpu"
+    # Create simple dummy model and datasets
+    model = nn.Sequential(
+        nn.Flatten(),
+        nn.Linear(3 * 32 * 32, 16),
+        nn.ReLU(),
+        nn.Linear(16, 10),
+    )
+    
+    # Create dummy retain and forget loaders
+    x_retain = torch.randn(16, 3, 32, 32)
+    y_retain = torch.randint(1, 10, (16,))
+    retain_loader = DataLoader(TensorDataset(x_retain, y_retain), batch_size=8)
+
+    x_forget = torch.randn(8, 3, 32, 32)
+    y_forget = torch.zeros(8, dtype=torch.long)
+    forget_loader = DataLoader(TensorDataset(x_forget, y_forget), batch_size=4)
+
+    # 1. Random Label
+    m1 = unlearn_random_label(
+        model=nn.Sequential(nn.Flatten(), nn.Linear(3 * 32 * 32, 16), nn.ReLU(), nn.Linear(16, 10)),
+        retain_loader=retain_loader,
+        forget_loader=forget_loader,
+        num_classes=10,
+        epochs=1,
+        device=device,
+    )
+    assert m1 is not None
+
+    # 2. SalUn
+    m2 = unlearn_salun(
+        model=nn.Sequential(nn.Flatten(), nn.Linear(3 * 32 * 32, 16), nn.ReLU(), nn.Linear(16, 10)),
+        retain_loader=retain_loader,
+        forget_loader=forget_loader,
+        num_classes=10,
+        threshold=0.5,
+        epochs=1,
+        device=device,
+    )
+    assert m2 is not None
+
+    # 3. SCRUB
+    m3 = unlearn_scrub(
+        model=nn.Sequential(nn.Flatten(), nn.Linear(3 * 32 * 32, 16), nn.ReLU(), nn.Linear(16, 10)),
+        retain_loader=retain_loader,
+        forget_loader=forget_loader,
+        epochs=1,
+        msteps=1,
+        device=device,
+    )
+    assert m3 is not None
+
+    # 4. NegGrad+
+    m4 = unlearn_neggrad_plus(
+        model=nn.Sequential(nn.Flatten(), nn.Linear(3 * 32 * 32, 16), nn.ReLU(), nn.Linear(16, 10)),
+        retain_loader=retain_loader,
+        forget_loader=forget_loader,
+        epochs=1,
+        device=device,
+    )
+    assert m4 is not None
+
+    # 5. UNSIR / TarUn
+    m5 = unlearn_tarun_unsir(
+        model=nn.Sequential(nn.Flatten(), nn.Linear(3 * 32 * 32, 16), nn.ReLU(), nn.Linear(16, 10)),
+        retain_loader=retain_loader,
+        forget_loader=forget_loader,
+        forget_classes=[0],
+        num_classes=10,
+        img_shape=(3, 32, 32),
+        noise_epochs=1,
+        noise_steps=1,
+        impair_epochs=1,
+        impair_batches=1,
+        repair_epochs=1,
+        device=device,
+    )
+    assert m5 is not None
