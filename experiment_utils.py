@@ -617,3 +617,59 @@ def visualize_feature_space_and_boundaries(
         plt.savefig(save_path, dpi=200, bbox_inches="tight")
         print(f"Saved feature visualization plot to: {save_path}")
     plt.show()
+
+
+def print_metrics_summary_table(
+    results: List[Dict],
+    title: str = "Unlearning Benchmark Metrics Summary",
+    save_csv_path: Optional[str] = None,
+):
+    """
+    Renders and prints a consolidated, formatted markdown summary table across
+    methods/models/seeds for all 3 tiers of metrics:
+    - Output Accuracy (Retain / Forget)
+    - Linear Probe (LP) Accuracy (Retain / Forget & Illusion Gap)
+    - Nearest Class Center (NCC) Accuracy (Retain / Forget & Illusion Gap)
+    - Runtime (seconds)
+    Optionally saves the structured summary table to a CSV file.
+    """
+    import pandas as pd
+
+    records = []
+    for r in results:
+        method = r.get("method") or r.get("variant") or "unknown"
+        model_name = r.get("model_name", "resnet18")
+        seed = r.get("seed", 0)
+        runtime = r.get("runtime_sec", 0.0)
+        tm = r.get("test_metrics", {})
+
+        records.append({
+            "Method / Variant": method,
+            "Model": model_name,
+            "Seed": seed,
+            "Retain Acc (Out)": f"{tm.get('output_retain', 0.0)*100:.2f}%",
+            "Forget Acc (Out)": f"{tm.get('output_forget', 0.0)*100:.2f}%",
+            "Retain Acc (LP)": f"{tm.get('lp_retain', 0.0)*100:.2f}%",
+            "Forget Acc (LP)": f"{tm.get('lp_forget', 0.0)*100:.2f}%",
+            "LP Illusion Gap": f"{tm.get('illusion_gap_lp', 0.0)*100:.2f}%",
+            "Retain Acc (NCC)": f"{tm.get('ncc_retain', 0.0)*100:.2f}%",
+            "Forget Acc (NCC)": f"{tm.get('ncc_forget', 0.0)*100:.2f}%",
+            "NCC Illusion Gap": f"{tm.get('illusion_gap_ncc', 0.0)*100:.2f}%",
+            "Runtime (s)": f"{runtime:.2f}",
+        })
+
+    df = pd.DataFrame(records)
+    print(f"\n{'=' * 100}")
+    print(f" {title.upper()} ")
+    print(f"{'=' * 100}\n")
+    try:
+        print(df.to_markdown(index=False))
+    except (ImportError, Exception):
+        print(df.to_string(index=False))
+    print(f"\n{'=' * 100}\n")
+
+    if save_csv_path:
+        os.makedirs(os.path.dirname(save_csv_path), exist_ok=True)
+        df.to_csv(save_csv_path, index=False)
+        print(f"Summary table saved to: {save_csv_path}")
+    return df

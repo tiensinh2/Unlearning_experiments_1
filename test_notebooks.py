@@ -207,3 +207,34 @@ def test_visualization_utility_smoke():
         save_path="./artifacts/plots/test_plot.png"
     )
     assert os.path.exists("./artifacts/plots/test_plot.png")
+
+def test_summary_table_smoke():
+    """Verify that print_metrics_summary_table formats and outputs correctly."""
+    from experiment_utils import print_metrics_summary_table
+
+    sample_results = [
+        {
+            "method": "random_label",
+            "model_name": "resnet18",
+            "seed": 0,
+            "runtime_sec": 12.34,
+            "test_metrics": {
+                "output_retain": 0.92,
+                "output_forget": 0.05,
+                "lp_retain": 0.91,
+                "lp_forget": 0.45,
+                "illusion_gap_lp": 0.40,
+                "ncc_retain": 0.89,
+                "ncc_forget": 0.42,
+                "illusion_gap_ncc": 0.37,
+            }
+        }
+    ]
+    df = print_metrics_summary_table(
+        results=sample_results,
+        title="Test Summary",
+        save_csv_path="./artifacts/metrics/test_summary.csv"
+    )
+    assert df is not None
+    assert len(df) == 1
+    assert os.path.exists("./artifacts/metrics/test_summary.csv")
