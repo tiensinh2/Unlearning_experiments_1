@@ -76,7 +76,8 @@ def unlearn_tarun_unsir(
     # --- Step 2: Impair Step (Weight perturbation with noise + retain data) ---
     # Construct noisy dataset (synthesized noise with pseudo label 0 + retain samples)
     model.train()
-    optimizer_impair = optim.Adam(model.parameters(), lr=impair_lr)
+    trainable_impair = [p for p in model.parameters() if p.requires_grad]
+    optimizer_impair = optim.Adam(trainable_impair, lr=impair_lr)
 
     # Collect retain sample subset for mix
     retain_samples = []
@@ -113,7 +114,8 @@ def unlearn_tarun_unsir(
             optimizer_impair.step()
 
     # --- Step 3: Repair Step (Fine-tuning on Retain Set) ---
-    optimizer_repair = optim.Adam(model.parameters(), lr=repair_lr)
+    trainable_repair = [p for p in model.parameters() if p.requires_grad]
+    optimizer_repair = optim.Adam(trainable_repair, lr=repair_lr)
 
     for _ in range(repair_epochs):
         for images, targets in retain_loader:

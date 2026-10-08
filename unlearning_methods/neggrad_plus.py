@@ -26,7 +26,8 @@ def unlearn_neggrad_plus(
     model.to(device)
     model.train()
     criterion = nn.CrossEntropyLoss()
-    optimizer = optim.SGD(model.parameters(), lr=lr, momentum=momentum, weight_decay=weight_decay)
+    trainable_params = [p for p in model.parameters() if p.requires_grad]
+    optimizer = optim.SGD(trainable_params, lr=lr, momentum=momentum, weight_decay=weight_decay)
 
     for epoch in range(epochs):
         for (x_r, y_r), (x_f, y_f) in zip(retain_loader, cycle(forget_loader)):

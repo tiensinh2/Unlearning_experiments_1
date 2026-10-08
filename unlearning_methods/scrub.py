@@ -50,7 +50,8 @@ def unlearn_scrub(
 
     criterion_cls = nn.CrossEntropyLoss()
     criterion_kd = DistillKL(T=kd_T)
-    optimizer = optim.SGD(student.parameters(), lr=lr, momentum=momentum, weight_decay=weight_decay)
+    trainable_params = [p for p in student.parameters() if p.requires_grad]
+    optimizer = optim.SGD(trainable_params, lr=lr, momentum=momentum, weight_decay=weight_decay)
 
     for epoch in range(1, epochs + 1):
         # Phase 1: Maximize divergence on Forget set

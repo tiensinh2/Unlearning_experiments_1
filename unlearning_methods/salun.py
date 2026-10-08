@@ -111,7 +111,8 @@ def unlearn_salun(
 
     model.train()
     criterion = nn.CrossEntropyLoss()
-    optimizer = optim.SGD(model.parameters(), lr=lr, momentum=momentum, weight_decay=weight_decay)
+    trainable_params = [p for p in model.parameters() if p.requires_grad]
+    optimizer = optim.SGD(trainable_params, lr=lr, momentum=momentum, weight_decay=weight_decay)
 
     for epoch in range(epochs):
         # 1. Update on forget set using randomized labels
