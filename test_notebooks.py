@@ -168,3 +168,42 @@ def test_unlearning_methods_smoke():
         device=device,
     )
     assert m5 is not None
+
+def test_visualization_utility_smoke():
+    """Verify that visualize_feature_space_and_boundaries runs without errors."""
+    import torch
+    import torch.nn as nn
+    from torch.utils.data import DataLoader, TensorDataset
+    from experiment_utils import FullClassifier, ClassifierHead, visualize_feature_space_and_boundaries
+
+    class DummyEncoder(nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.linear = nn.Linear(3 * 32 * 32, 16)
+            self.feature_dim = 16
+        def forward(self, x):
+            return self.linear(x.view(x.size(0), -1))
+
+    encoder = DummyEncoder()
+    head = ClassifierHead(in_features=16, num_classes=10)
+    model = FullClassifier(encoder, head)
+
+    x_retain = torch.randn(20, 3, 32, 32)
+    y_retain = torch.randint(0, 10, (20,))
+    retain_loader = DataLoader(TensorDataset(x_retain, y_retain), batch_size=10)
+
+    x_forget = torch.randn(10, 3, 32, 32)
+    y_forget = torch.zeros(10, dtype=torch.long)
+    forget_loader = DataLoader(TensorDataset(x_forget, y_forget), batch_size=5)
+
+    visualize_feature_space_and_boundaries(
+        model=model,
+        retain_loader=retain_loader,
+        forget_loader=forget_loader,
+        num_classes=10,
+        forget_class=0,
+        title="Test Visualization",
+        device="cpu",
+        save_path="./artifacts/plots/test_plot.png"
+    )
+    assert os.path.exists("./artifacts/plots/test_plot.png")

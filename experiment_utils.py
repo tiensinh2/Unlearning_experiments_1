@@ -476,3 +476,144 @@ def evaluate_three_tier_metrics(
         "illusion_gap_lp": gap_lp,
         "illusion_gap_ncc": gap_ncc,
     }
+
+
+# ==============================================================================
+# 4. Feature Space 2D Projection & Decision Boundary Visualization
+# ==============================================================================
+
+def visualize_feature_space_and_boundaries(
+    model: nn.Module,
+    retain_loader: DataLoader,
+    forget_loader: DataLoader,
+    num_classes: int = 10,
+    forget_class: int = 0,
+    title: str = "Feature Space & Decision Boundaries",
+    max_samples_per_class: int = 100,
+    device: str = "cuda",
+    save_path: Optional[str] = None,
+):
+    """
+    Visualizes representations in 2D PCA space:
+    1. Extracts high-dimensional representations for retain & forget samples.
+    2. Projects them to 2D via PCA.
+    3. Projects linear classification head weights (decision boundary normals) into the same 2D PCA plane.
+    4. Plots class clusters (highlighting forget class) and decision hyperplanes/vectors.
+    """
+    import matplotlib.pyplot as plt
+    from sklearn.decomposition import PCA
+
+    # Extract encoder
+    encoder = getattr(model, "encoder", model)
+    encoder.eval()
+
+    # Collect retain and forget features
+    feats_r, labels_r = extract_features(encoder, retain_loader, device=device)
+    feats_f, labels_f = extract_features(encoder, forget_loader, device=device)
+
+    # Subsample for clear visualization
+    selected_feats = []
+    selected_labels = []
+    is_forget = []
+
+    # Forget samples
+    if len(feats_f) > max_samples_per_class * 2:
+        idx_f = np.random.choice(len(feats_f), max_samples_per_class * 2, replace=False)
+    else:
+        idx_f = np.arange(len(feats_f))
+    selected_feats.append(feats_f[idx_f])
+    selected_labels.append(labels_f[idx_f])
+    is_forget.append(np.ones(len(idx_f), dtype=bool))
+
+    # Retain samples per class
+    for c in range(num_classes):
+        mask_c = (labels_r == c)
+        if mask_c.sum() > 0:
+            c_feats = feats_r[mask_c]
+            c_labels = labels_r[mask_c]
+            if len(c_feats) > max_samples_per_class:
+                idx_c = np.random.choice(len(c_feats), max_samples_per_class, replace=False)
+            else:
+                idx_c = np.arange(len(c_feats))
+            selected_feats.append(c_feats[idx_c])
+            selected_labels.append(c_labels[idx_c])
+            is_forget.append(np.zeros(len(idx_c), dtype=bool))
+
+    X = np.concatenate(selected_feats, axis=0)
+    y = np.concatenate(selected_labels, axis=0)
+    is_f = np.concatenate(is_forget, axis=0)
+
+    # Fit 2D PCA
+    pca = PCA(n_components=2, random_state=42)
+    X_2d = pca.fit_transform(X)
+
+    plt.figure(figsize=(10, 8))
+    cmap = plt.get_cmap("tab10")
+
+    # Plot retain samples
+    retain_mask = ~is_f
+    for c in range(num_classes):
+        c_mask = retain_mask & (y == c)
+        if c_mask.sum() > 0:
+            plt.scatter(
+                X_2d[c_mask, 0], X_2d[c_mask, 1],
+                color=cmap(c % 10), label=f"Retain Class {c}",
+                alpha=0.4, s=25, edgecolors="none"
+            )
+
+    # Plot forget samples with distinct marker
+    forget_mask = is_f
+    plt.scatter(
+        X_2d[forget_mask, 0], X_2d[forget_mask, 1],
+        color="red", label=f"Forget Class {forget_class} (D_f)",
+        marker="x", s=55, linewidths=1.5, alpha=0.85
+    )
+
+    # Extract linear weights from head (or AdaptiveBlendedClassifier)
+    weight_matrix = None
+    if hasattr(model, "head") and hasattr(model.head, "linear"):
+        weight_matrix = model.head.linear.weight.detach().cpu().numpy()
+    elif hasattr(model, "linear"):
+        if hasattr(model, "alpha") and hasattr(model, "cmf_weights"):
+            alpha = float(model.alpha)
+            w_learned = model.linear.weight.detach().cpu().numpy()
+            w_cmf = model.cmf_weights.detach().cpu().numpy()
+            weight_matrix = (1.0 - alpha) * w_learned + alpha * w_cmf
+        else:
+            weight_matrix = model.linear.weight.detach().cpu().numpy()
+
+    if weight_matrix is not None:
+        # Project weight vectors to PCA space
+        W_proj = pca.transform(weight_matrix)
+        origin = np.array([0, 0])
+
+        for c in range(min(num_classes, len(W_proj))):
+            vec = W_proj[c]
+            norm = np.linalg.norm(vec) + 1e-8
+            # Scale vector for clear visibility on the scatter plot
+            scale = np.std(X_2d) * 1.5
+            scaled_vec = (vec / norm) * scale
+            color = "black" if c == forget_class else cmap(c % 10)
+            linestyle = "--" if c == forget_class else "-"
+            plt.arrow(
+                0, 0, scaled_vec[0], scaled_vec[1],
+                color=color, alpha=0.8, width=0.03, head_width=0.25,
+                length_includes_head=True, linestyle=linestyle
+            )
+            plt.text(
+                scaled_vec[0] * 1.12, scaled_vec[1] * 1.12, f"W_{c}",
+                color=color, fontsize=11, fontweight="bold", ha="center", va="center"
+            )
+
+    plt.title(title, fontsize=14, fontweight="bold")
+    plt.xlabel(f"PCA Component 1 ({pca.explained_variance_ratio_[0]*100:.1f}%)", fontsize=11)
+    plt.ylabel(f"PCA Component 2 ({pca.explained_variance_ratio_[1]*100:.1f}%)", fontsize=11)
+    plt.legend(bbox_to_anchor=(1.04, 1), loc="upper left", fontsize=9)
+    plt.grid(True, linestyle=":", alpha=0.6)
+    plt.tight_layout()
+
+    if save_path:
+        os.makedirs(os.path.dirname(save_path), exist_ok=True)
+        plt.savefig(save_path, dpi=200, bbox_inches="tight")
+        print(f"Saved feature visualization plot to: {save_path}")
+    plt.show()
