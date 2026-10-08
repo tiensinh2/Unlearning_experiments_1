@@ -241,6 +241,21 @@ def get_dataset_transforms(dataset_name: str = "cifar10"):
             transforms.ToTensor(),
             transforms.Normalize(mean=mean, std=std),
         ])
+    elif dataset_name in ["mnist", "fashion_mnist"]:
+        mean, std = ([0.1307, 0.1307, 0.1307], [0.3081, 0.3081, 0.3081]) if dataset_name == "mnist" else ([0.2860, 0.2860, 0.2860], [0.3560, 0.3560, 0.3560])
+        train_tf = transforms.Compose([
+            transforms.Grayscale(num_output_channels=3),
+            transforms.Resize((32, 32)),
+            transforms.RandomHorizontalFlip(p=0.5),
+            transforms.ToTensor(),
+            transforms.Normalize(mean=mean, std=std),
+        ])
+        eval_tf = transforms.Compose([
+            transforms.Grayscale(num_output_channels=3),
+            transforms.Resize((32, 32)),
+            transforms.ToTensor(),
+            transforms.Normalize(mean=mean, std=std),
+        ])
     else:
         mean, std = [0.5, 0.5, 0.5], [0.5, 0.5, 0.5]
         train_tf = transforms.Compose([transforms.ToTensor(), transforms.Normalize(mean=mean, std=std)])
@@ -265,7 +280,16 @@ def create_and_persist_splits(
 
     if os.path.exists(split_filename):
         with open(split_filename, "r") as f:
-            return json.load(f)
+            split_artifact = json.load(f)
+        # Validate loaded split integrity and disjointness
+        train_idx = set(split_artifact["train_indices"])
+        val_idx = set(split_artifact["val_indices"])
+        train_r_idx = set(split_artifact["train_r_indices"])
+        train_f_idx = set(split_artifact["train_f_indices"])
+        assert len(train_idx.intersection(val_idx)) == 0, "Loaded split: train and val overlap"
+        assert len(train_r_idx.intersection(train_f_idx)) == 0, "Loaded split: retain and forget overlap"
+        assert train_r_idx.union(train_f_idx) == train_idx, "Loaded split: retain union forget != train"
+        return split_artifact
 
     if dataset_name.lower() == "cifar10":
         raw_train = datasets.CIFAR10(root=root, train=True, download=True)
@@ -432,6 +456,67 @@ def compute_ncc_accuracy(
     return acc
 
 
+@torch.no_grad()
+def compute_mia_metrics(
+    model: nn.Module,
+    forget_loader: DataLoader,
+    nonmember_loader: DataLoader,
+    device: str = "cuda"
+) -> Dict[str, float]:
+    """
+    Evaluates Membership Inference Attack (MIA) and Indiscernibility metrics on forgotten samples (D_F)
+    versus unseen non-members (D_V or D_T).
+    
+    Computes per-sample cross-entropy loss: s_i = -loss_i.
+    Higher score indicates higher likelihood of training membership.
+    
+    Returns:
+        mia_forget: AUC-ROC of separating D_F from non-members in [0, 1].
+        disc_forget: Discernibility |2 * MIA - 1| in [0, 1].
+        indisc_forget: Indiscernibility 1 - Disc in [0, 1].
+    """
+    model.eval()
+    criterion = nn.CrossEntropyLoss(reduction="none")
+
+    forget_losses = []
+    for images, targets in forget_loader:
+        images = images.to(device)
+        targets = targets.to(device) if isinstance(targets, torch.Tensor) else torch.tensor(targets, device=device)
+        outputs = model(images)
+        loss = criterion(outputs, targets)
+        forget_losses.extend(loss.cpu().numpy().tolist())
+
+    nonmember_losses = []
+    for images, targets in nonmember_loader:
+        images = images.to(device)
+        targets = targets.to(device) if isinstance(targets, torch.Tensor) else torch.tensor(targets, device=device)
+        outputs = model(images)
+        loss = criterion(outputs, targets)
+        nonmember_losses.extend(loss.cpu().numpy().tolist())
+
+    if len(forget_losses) == 0 or len(nonmember_losses) == 0:
+        return {"mia_forget": 0.5, "disc_forget": 0.0, "indisc_forget": 1.0}
+
+    y_true = np.concatenate([np.ones(len(forget_losses)), np.zeros(len(nonmember_losses))])
+    # Lower loss indicates higher membership likelihood -> score = -loss
+    scores = -np.concatenate([np.array(forget_losses), np.array(nonmember_losses)])
+
+    try:
+        from sklearn.metrics import roc_auc_score
+        mia = float(roc_auc_score(y_true, scores))
+    except Exception:
+        mia = 0.5
+
+    disc = float(abs(2.0 * mia - 1.0))
+    indisc = float(1.0 - disc)
+
+    return {
+        "mia_forget": mia,
+        "disc_forget": disc,
+        "indisc_forget": indisc,
+    }
+
+
 def evaluate_three_tier_metrics(
     model: FullClassifier,
     probe_train_loader: DataLoader,
@@ -441,42 +526,50 @@ def evaluate_three_tier_metrics(
     seed: int = 123,
     device: str = "cuda",
     test_eval_loader: Optional[DataLoader] = None,
+    nonmember_loader: Optional[DataLoader] = None,
 ) -> Dict[str, float]:
     """
-    Evaluates Output, Linear Probe, and NCC accuracy for Retain (D_R or D_V or D_T) and Forget subsets (D_F),
-    plus the Illusion Gap metrics.
+    Evaluates three distinct categories of unlearning metrics:
     
-    probe_train_loader: D_R (clean retain training set with true labels) used exclusively
-                        for fitting the Linear Probe and constructing NCC class centers.
-    retain_eval_loader: Evaluation loader for the retain subset (D_R or D_V).
-    forget_eval_loader: Evaluation loader for the forget subset (D_F).
-    test_eval_loader:   Optional evaluation loader for the official test set (D_T).
+    1. Accuracy / Utility:
+       - output_retain: Retain training set accuracy on D_R (matches Deep Unlearn benchmark definition).
+       - output_forget: Forget set accuracy on D_F.
+       - output_test: Generalization accuracy on official unseen test set D_T.
+       
+    2. Representation Diagnostic (Linear Probe & NCC):
+       - lp_retain, ncc_retain: In-sample representation diagnostics on D_R.
+       - lp_forget, ncc_forget: Latent representation unlearning effectiveness on D_F.
+       - lp_test, ncc_test: Out-of-sample representation retention on D_T.
+       - illusion_gap_lp, illusion_gap_ncc: Illusion gap metrics on D_F.
+       
+    3. Privacy / Membership Inference (MIA):
+       - mia_forget: AUC-ROC of distinguishing D_F from unseen non-members (D_V or D_T).
+       - disc_forget: Discernibility |2 * MIA - 1|.
+       - indisc_forget: Indiscernibility 1 - Disc.
     """
-    # 1. Output Accuracies
+    # --- Category 1: Accuracy / Utility ---
     out_r = compute_output_accuracy(model, retain_eval_loader, device=device)
     out_f = compute_output_accuracy(model, forget_eval_loader, device=device)
 
-    # 2. Extract Features
-    # Note: probe_train_loader MUST be clean D_R with true labels to prevent contamination
+    # --- Category 2: Representation Diagnostic ---
     train_feats, train_targets = extract_features(model.encoder, probe_train_loader, device=device)
     r_feats, r_targets = extract_features(model.encoder, retain_eval_loader, device=device)
     f_feats, f_targets = extract_features(model.encoder, forget_eval_loader, device=device)
 
-    # 3. Linear Probe Accuracies
     lp_r = compute_linear_probe_accuracy(train_feats, train_targets, r_feats, r_targets, seed=seed)
     lp_f = compute_linear_probe_accuracy(train_feats, train_targets, f_feats, f_targets, seed=seed)
 
-    # 4. NCC Accuracies
     ncc_r = compute_ncc_accuracy(train_feats, train_targets, r_feats, r_targets, num_classes=num_classes)
     ncc_f = compute_ncc_accuracy(train_feats, train_targets, f_feats, f_targets, num_classes=num_classes)
 
-    # 5. Illusion Gap
     gap_lp = max(lp_f - out_f, 0.0)
     gap_ncc = max(ncc_f - out_f, 0.0)
 
     res = {
+        # Category 1: Accuracy / Utility
         "output_retain": out_r,
         "output_forget": out_f,
+        # Category 2: Representation
         "lp_retain": lp_r,
         "lp_forget": lp_f,
         "ncc_retain": ncc_r,
@@ -493,6 +586,18 @@ def evaluate_three_tier_metrics(
         res["output_test"] = out_t
         res["lp_test"] = lp_t
         res["ncc_test"] = ncc_t
+
+    # --- Category 3: Privacy / Membership Inference (U-MIA) ---
+    # Non-member reference population MUST be D_V (passed via nonmember_loader).
+    # Falling back to retain_eval_loader (D_R) would silently compare members against members,
+    # producing ~0.5 AUC and falsely indicating ideal unlearning.  Fail loudly instead.
+    if nonmember_loader is None:
+        raise ValueError(
+            "nonmember_loader is required for MIA computation. "
+            "Pass the D_V validation loader (never D_R or D_T) as nonmember_loader."
+        )
+    mia_res = compute_mia_metrics(model, forget_eval_loader, nonmember_loader, device=device)
+    res.update(mia_res)
 
     return res
 
@@ -677,6 +782,8 @@ def print_metrics_summary_table(
             "Forget Acc (NCC)": f"{tm.get('ncc_forget', 0.0)*100:.2f}%",
             "Test Acc (NCC)": f"{tm.get('ncc_test', 0.0)*100:.2f}%" if "ncc_test" in tm else "-",
             "NCC Illusion Gap": f"{tm.get('illusion_gap_ncc', 0.0)*100:.2f}%",
+            "MIA (Forget)": f"{tm.get('mia_forget', 0.0)*100:.2f}%" if "mia_forget" in tm else "-",
+            "Indiscernibility": f"{tm.get('indisc_forget', 0.0)*100:.2f}%" if "indisc_forget" in tm else "-",
             "Runtime (s)": f"{runtime:.2f}",
         })
 

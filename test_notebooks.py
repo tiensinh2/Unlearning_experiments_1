@@ -277,7 +277,8 @@ def test_evaluate_three_tier_metrics_dataset_separation():
         num_classes=10,
         seed=123,
         device="cpu",
-        test_eval_loader=t_loader
+        test_eval_loader=t_loader,
+        nonmember_loader=f_loader,  # use forget loader as stand-in non-member set for the smoke test
     )
     assert "output_retain" in res
     assert "output_forget" in res
@@ -290,3 +291,35 @@ def test_evaluate_three_tier_metrics_dataset_separation():
     assert "ncc_test" in res
     assert "illusion_gap_lp" in res
     assert "illusion_gap_ncc" in res
+    assert "mia_forget" in res
+    assert "disc_forget" in res
+    assert "indisc_forget" in res
+
+
+def test_mia_computation_smoke():
+    """Verify compute_mia_metrics calculates AUC, Discernibility, and Indiscernibility."""
+    import torch
+    import torch.nn as nn
+    from torch.utils.data import DataLoader, TensorDataset
+    from experiment_utils import compute_mia_metrics
+
+    model = nn.Sequential(
+        nn.Flatten(),
+        nn.Linear(3 * 32 * 32, 10)
+    )
+
+    x_f = torch.randn(20, 3, 32, 32)
+    y_f = torch.randint(0, 10, (20,))
+    f_loader = DataLoader(TensorDataset(x_f, y_f), batch_size=10)
+
+    x_nm = torch.randn(20, 3, 32, 32)
+    y_nm = torch.randint(0, 10, (20,))
+    nm_loader = DataLoader(TensorDataset(x_nm, y_nm), batch_size=10)
+
+    mia_res = compute_mia_metrics(model, f_loader, nm_loader, device="cpu")
+    assert "mia_forget" in mia_res
+    assert "disc_forget" in mia_res
+    assert "indisc_forget" in mia_res
+    assert 0.0 <= mia_res["mia_forget"] <= 1.0
+    assert 0.0 <= mia_res["disc_forget"] <= 1.0
+    assert 0.0 <= mia_res["indisc_forget"] <= 1.0

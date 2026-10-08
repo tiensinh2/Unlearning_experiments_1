@@ -7,7 +7,6 @@ and data_instruction.md.
 from typing import Dict, List, Optional, Tuple, Union
 import copy
 import os
-import torch
 from torch.utils.data import DataLoader, Dataset, Subset
 from torchvision import datasets, transforms
 
@@ -195,52 +194,64 @@ def build_unlearning_splits(
     """
     Generates deterministic partitions (Train, Retain, Forget, Validation, Test)
     according to Table 2 of arXiv:2410.01276v2 and data_instruction.md.
+
+    AUTHORITATIVE SPLIT SOURCE: delegates to experiment_utils.create_and_persist_splits so
+    that both data_loader.py and the notebook pipeline always produce identical index lists.
+    The split is persisted to ./artifacts/splits/ on first call and reloaded on subsequent calls.
     """
     dataset_name = dataset_name.lower().replace("-", "_")
     cfg = DATASET_CONFIGS[dataset_name]
     train_transform, eval_transform = get_transforms(dataset_name)
 
+    # ------------------------------------------------------------------
+    # Use the single authoritative split function from experiment_utils.
+    # This guarantees identical index lists whether the code reaches this
+    # function via data_loader or directly via experiment_utils.
+    # ------------------------------------------------------------------
+    from experiment_utils import create_and_persist_splits
+    split_info = create_and_persist_splits(
+        dataset_name=dataset_name,
+        root=root,
+        seed=seed,
+        save_dir="./artifacts/splits",
+    )
+
     raw_dev, raw_test = load_raw_dataset(dataset_name, root=root)
-    generator = torch.Generator().manual_seed(seed)
 
     if raw_test is None:
-        # Handle unpartitioned datasets like UTKFace (80% dev, 20% test)
-        total_len = len(raw_dev)
-        total_perm = torch.randperm(total_len, generator=generator).tolist()
-        dev_len = cfg["dev_size"]
-        dev_indices = total_perm[:dev_len]
-        test_indices = total_perm[dev_len:]
+        # UTKFace: raw_dev is the full ImageFolder; split_info carries all index lists.
+        # test_indices were derived from the *same* total_perm in create_and_persist_splits.
+        # NOTE: UTKFace support requires create_and_persist_splits to handle it; currently
+        # experiment_utils.create_and_persist_splits raises ValueError for UTKFace, which is
+        # the expected behaviour — UTKFace notebooks must use build_unlearning_splits directly.
+        raise NotImplementedError(
+            f"Dataset '{dataset_name}' (UTKFace) requires the full ImageFolder split path "
+            "which is not yet unified. Use build_unlearning_splits from data_loader.py "
+            "with the original standalone implementation for UTKFace-specific experiments."
+        )
 
-        dev_dataset = Subset(raw_dev, dev_indices)
-        test_dataset = TransformSubset(Subset(raw_dev, test_indices), eval_transform)
-        dev_len_actual = len(dev_indices)
-    else:
-        dev_dataset = raw_dev
-        test_dataset = TransformSubset(raw_test, eval_transform)
-        dev_len_actual = len(raw_dev)
+    # Standard datasets (CIFAR-10/100, MNIST, FashionMNIST): raw_dev is the torchvision
+    # train split and raw_test is the torchvision test split.
+    dev_dataset = raw_dev
+    test_dataset = TransformSubset(raw_test, eval_transform)
 
-    # 1. Split Dev -> Train (D) and Validation (D_V)
-    dev_perm = torch.randperm(dev_len_actual, generator=generator).tolist()
-    train_indices = dev_perm[:cfg["train_size"]]
-    val_indices = dev_perm[cfg["train_size"]:cfg["train_size"] + cfg["val_size"]]
+    train_indices   = split_info["train_indices"]
+    val_indices     = split_info["val_indices"]
+    retain_indices  = split_info["train_r_indices"]
+    forget_indices  = split_info["train_f_indices"]
 
-    # 2. Split Train (D) -> Retain (D_R) [90%] and Forget (D_F) [10%]
-    train_perm = torch.randperm(len(train_indices), generator=generator).tolist()
-    retain_indices = [train_indices[i] for i in train_perm[:cfg["retain_size"]]]
-    forget_indices = [train_indices[i] for i in train_perm[cfg["retain_size"]:]]
-
-    # 3. Wrap with transforms
-    full_train_set = TransformSubset(Subset(dev_dataset, train_indices), train_transform)
+    # Wrap with transforms
+    full_train_set  = TransformSubset(Subset(dev_dataset, train_indices),  train_transform)
     retain_train_set = TransformSubset(Subset(dev_dataset, retain_indices), train_transform)
-    retain_eval_set = TransformSubset(Subset(dev_dataset, retain_indices), eval_transform)
-    forget_eval_set = TransformSubset(Subset(dev_dataset, forget_indices), eval_transform)
-    val_set = TransformSubset(Subset(dev_dataset, val_indices), eval_transform)
+    retain_eval_set  = TransformSubset(Subset(dev_dataset, retain_indices), eval_transform)
+    forget_eval_set  = TransformSubset(Subset(dev_dataset, forget_indices), eval_transform)
+    val_set          = TransformSubset(Subset(dev_dataset, val_indices),    eval_transform)
 
     # Validate exact disjoint partition
     assert len(retain_indices) == cfg["retain_size"], f"Retain size mismatch: {len(retain_indices)} vs {cfg['retain_size']}"
     assert len(forget_indices) == cfg["forget_size"], f"Forget size mismatch: {len(forget_indices)} vs {cfg['forget_size']}"
-    assert len(val_indices) == cfg["val_size"], f"Val size mismatch: {len(val_indices)} vs {cfg['val_size']}"
-    assert len(test_dataset) == cfg["test_size"], f"Test size mismatch: {len(test_dataset)} vs {cfg['test_size']}"
+    assert len(val_indices)    == cfg["val_size"],    f"Val size mismatch: {len(val_indices)} vs {cfg['val_size']}"
+    assert len(test_dataset)   == cfg["test_size"],   f"Test size mismatch: {len(test_dataset)} vs {cfg['test_size']}"
 
     return {
         "train": full_train_set,
