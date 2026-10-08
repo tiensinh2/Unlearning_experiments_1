@@ -434,23 +434,31 @@ def compute_ncc_accuracy(
 
 def evaluate_three_tier_metrics(
     model: FullClassifier,
-    train_loader: DataLoader,
+    probe_train_loader: DataLoader,
     retain_eval_loader: DataLoader,
     forget_eval_loader: DataLoader,
     num_classes: int = 10,
     seed: int = 123,
-    device: str = "cuda"
+    device: str = "cuda",
+    test_eval_loader: Optional[DataLoader] = None,
 ) -> Dict[str, float]:
     """
-    Evaluates Output, Linear Probe, and NCC accuracy for Retain and Forget subsets,
+    Evaluates Output, Linear Probe, and NCC accuracy for Retain (D_R or D_V or D_T) and Forget subsets (D_F),
     plus the Illusion Gap metrics.
+    
+    probe_train_loader: D_R (clean retain training set with true labels) used exclusively
+                        for fitting the Linear Probe and constructing NCC class centers.
+    retain_eval_loader: Evaluation loader for the retain subset (D_R or D_V).
+    forget_eval_loader: Evaluation loader for the forget subset (D_F).
+    test_eval_loader:   Optional evaluation loader for the official test set (D_T).
     """
     # 1. Output Accuracies
     out_r = compute_output_accuracy(model, retain_eval_loader, device=device)
     out_f = compute_output_accuracy(model, forget_eval_loader, device=device)
 
     # 2. Extract Features
-    train_feats, train_targets = extract_features(model.encoder, train_loader, device=device)
+    # Note: probe_train_loader MUST be clean D_R with true labels to prevent contamination
+    train_feats, train_targets = extract_features(model.encoder, probe_train_loader, device=device)
     r_feats, r_targets = extract_features(model.encoder, retain_eval_loader, device=device)
     f_feats, f_targets = extract_features(model.encoder, forget_eval_loader, device=device)
 
@@ -466,7 +474,7 @@ def evaluate_three_tier_metrics(
     gap_lp = max(lp_f - out_f, 0.0)
     gap_ncc = max(ncc_f - out_f, 0.0)
 
-    return {
+    res = {
         "output_retain": out_r,
         "output_forget": out_f,
         "lp_retain": lp_r,
@@ -476,6 +484,17 @@ def evaluate_three_tier_metrics(
         "illusion_gap_lp": gap_lp,
         "illusion_gap_ncc": gap_ncc,
     }
+
+    if test_eval_loader is not None:
+        out_t = compute_output_accuracy(model, test_eval_loader, device=device)
+        t_feats, t_targets = extract_features(model.encoder, test_eval_loader, device=device)
+        lp_t = compute_linear_probe_accuracy(train_feats, train_targets, t_feats, t_targets, seed=seed)
+        ncc_t = compute_ncc_accuracy(train_feats, train_targets, t_feats, t_targets, num_classes=num_classes)
+        res["output_test"] = out_t
+        res["lp_test"] = lp_t
+        res["ncc_test"] = ncc_t
+
+    return res
 
 
 # ==============================================================================
@@ -649,11 +668,14 @@ def print_metrics_summary_table(
             "Seed": seed,
             "Retain Acc (Out)": f"{tm.get('output_retain', 0.0)*100:.2f}%",
             "Forget Acc (Out)": f"{tm.get('output_forget', 0.0)*100:.2f}%",
+            "Test Acc (Out)": f"{tm.get('output_test', 0.0)*100:.2f}%" if "output_test" in tm else "-",
             "Retain Acc (LP)": f"{tm.get('lp_retain', 0.0)*100:.2f}%",
             "Forget Acc (LP)": f"{tm.get('lp_forget', 0.0)*100:.2f}%",
+            "Test Acc (LP)": f"{tm.get('lp_test', 0.0)*100:.2f}%" if "lp_test" in tm else "-",
             "LP Illusion Gap": f"{tm.get('illusion_gap_lp', 0.0)*100:.2f}%",
             "Retain Acc (NCC)": f"{tm.get('ncc_retain', 0.0)*100:.2f}%",
             "Forget Acc (NCC)": f"{tm.get('ncc_forget', 0.0)*100:.2f}%",
+            "Test Acc (NCC)": f"{tm.get('ncc_test', 0.0)*100:.2f}%" if "ncc_test" in tm else "-",
             "NCC Illusion Gap": f"{tm.get('illusion_gap_ncc', 0.0)*100:.2f}%",
             "Runtime (s)": f"{runtime:.2f}",
         })

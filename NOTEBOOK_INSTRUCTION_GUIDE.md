@@ -69,7 +69,7 @@ Use this as the spec when writing notebooks for any new benchmark. It contains n
 | 03 | Baseline unlearning methods without the feature-level mechanism. |
 | 04a / 04b / 04c | Three variants of the feature-level method. They **share one validation-driven continued-training loop** (Section 5) and differ only in what is trainable, how it is scored, and when it stops. |
 
-Dependencies: `01 → {02, 03, 04a}`, `04a → 04b`, `01 + 02 (val metrics) → 04c`.
+Dependencies: `01 → {02, 03, 04a}`, `04a → 04b`, `04b → 04c` (sequential refinement pipeline).
 
 ---
 
@@ -109,17 +109,17 @@ Shared rules:
 
 ### What differs per variant
 
-| | 04a: static | 04b: post-hoc classifier | 04c: adaptive blending |
+| | 04a: static CMF | 04b: post-hoc classifier alignment | 04c: iterative 2nd-stage CMF |
 |---|---|---|---|
-| **Start from** | original | best checkpoint of 04a | original |
-| **Trainable** | encoder; classifier head tied to class-mean features, rebuilt each epoch and frozen | classifier head only; encoder frozen | encoder and head; effective head `W = (1−α)·W_learned + α·W_class_mean` |
-| **Score (val)** | feature-level erasure (`1 − LP_f`, `1 − NCC_f`) + retain accuracy | low output forget accuracy + retain accuracy (feature metrics are unchanged by construction) | as 04a, plus a penalty on the illusion gap |
-| **Extra checks** | retain constraint | encoder unchanged (below) | `α = clamp(gap / scale, 0, 1)` with `gap = max(NCC_f − Output_f, 0)` |
-| **Stop** | patience per stage | patience per stage | patience, or val `NCC_f` within a tolerance of the oracle's **val** value |
+| **Start from** | original (`original_*.pt`) | best checkpoint of 04a (`cmf_04a_*.pt`) | best checkpoint of 04b (`cmf_04b_*.pt`) |
+| **Trainable** | encoder only; classifier head tied to class-mean features $\mathbf{w}_c$, rebuilt each epoch and frozen | classifier head only; encoder frozen | encoder only; classifier head dynamically reconstructed from class-mean features and frozen |
+| **Score (val)** | feature-level erasure (`1 − LP_f`, `1 − NCC_f`) + retain accuracy | low output forget accuracy + retain accuracy (feature metrics are unchanged by construction) | feature-level erasure (`1 − LP_f`, `1 − NCC_f`) + retain accuracy |
+| **Extra checks** | retain constraint | encoder unchanged (verified via state_dict hashes) | retain constraint |
+| **Stop** | patience per stage | patience per stage | patience per stage |
 
 Notes:
 - **04b encoder freeze:** set `requires_grad=False` **and** `encoder.eval()` (BatchNorm statistics otherwise keep changing the features); put only head parameters in the optimizer. Verify invariance directly: encoder `state_dict` identical (or equal hashes) and near-zero feature difference on a fixed validation batch. Do not assert on probe-accuracy differences (probe noise). Because the loop is validation-driven, there is no separate "choose `k` epochs" step. Report before and after: lowering output forget accuracy here is classifier suppression, not extra erasure.
-- **04c gap sign:** the gap must be large when the output is suppressed but the representation still separates the class, i.e. `NCC_f − Output_f`. The reverse subtraction gives a negative number and clamps `α` to 0. The oracle target for stopping comes from **validation** metrics over several oracle seeds, with a tolerance floor of a few samples so a near-zero spread cannot block stopping. Never use test numbers for stopping.
+- **04c 2nd-stage unlearning:** takes the classifier-aligned model from 04b (`cmf_04b_*.pt`), freezes the head parameters, and runs a secondary refined multi-stage encoder training loop with smaller learning rates to further eliminate residual representation leakage.
 
 ---
 

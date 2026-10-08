@@ -238,3 +238,55 @@ def test_summary_table_smoke():
     assert df is not None
     assert len(df) == 1
     assert os.path.exists("./artifacts/metrics/test_summary.csv")
+def test_evaluate_three_tier_metrics_dataset_separation():
+    """Verify that evaluate_three_tier_metrics handles probe training, eval, and test correctly."""
+    import torch
+    import torch.nn as nn
+    from torch.utils.data import DataLoader, TensorDataset
+    from experiment_utils import FullClassifier, ClassifierHead, evaluate_three_tier_metrics
+
+    class DummyEncoder(nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.linear = nn.Linear(3 * 32 * 32, 16)
+            self.feature_dim = 16
+        def forward(self, x):
+            return self.linear(x.view(x.size(0), -1))
+
+    encoder = DummyEncoder()
+    head = ClassifierHead(in_features=16, num_classes=10)
+    model = FullClassifier(encoder, head)
+
+    x_r = torch.randn(20, 3, 32, 32)
+    y_r = torch.randint(0, 10, (20,))
+    r_loader = DataLoader(TensorDataset(x_r, y_r), batch_size=10)
+
+    x_f = torch.randn(10, 3, 32, 32)
+    y_f = torch.randint(0, 10, (10,))
+    f_loader = DataLoader(TensorDataset(x_f, y_f), batch_size=5)
+
+    x_t = torch.randn(10, 3, 32, 32)
+    y_t = torch.randint(0, 10, (10,))
+    t_loader = DataLoader(TensorDataset(x_t, y_t), batch_size=5)
+
+    res = evaluate_three_tier_metrics(
+        model=model,
+        probe_train_loader=r_loader,
+        retain_eval_loader=r_loader,
+        forget_eval_loader=f_loader,
+        num_classes=10,
+        seed=123,
+        device="cpu",
+        test_eval_loader=t_loader
+    )
+    assert "output_retain" in res
+    assert "output_forget" in res
+    assert "output_test" in res
+    assert "lp_retain" in res
+    assert "lp_forget" in res
+    assert "lp_test" in res
+    assert "ncc_retain" in res
+    assert "ncc_forget" in res
+    assert "ncc_test" in res
+    assert "illusion_gap_lp" in res
+    assert "illusion_gap_ncc" in res
