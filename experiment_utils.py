@@ -689,7 +689,7 @@ def visualize_feature_space_and_boundaries(
         xlabel = f"PCA Component 1 ({reducer.explained_variance_ratio_[0]*100:.1f}%)"
         ylabel = f"PCA Component 2 ({reducer.explained_variance_ratio_[1]*100:.1f}%)"
 
-    plt.figure(figsize=(9, 7))
+    plt.figure(figsize=(10, 8))
     cmap = plt.get_cmap("tab10")
 
     # Plot retain samples
@@ -700,16 +700,75 @@ def visualize_feature_space_and_boundaries(
             plt.scatter(
                 X_2d[c_mask, 0], X_2d[c_mask, 1],
                 color=cmap(c % 10), label=f"Retain Class {c}",
-                alpha=0.45, s=25, edgecolors="none"
+                alpha=0.40, s=25, edgecolors="none"
             )
 
     # Plot forget samples (highlighted in red, matching Figure 6 of paper)
     forget_mask = is_f
     plt.scatter(
         X_2d[forget_mask, 0], X_2d[forget_mask, 1],
-        color="#d62728", label=f"Forgotten Class ({forget_class})",
-        marker="o", s=35, edgecolors="#800000", linewidths=0.8, alpha=0.9
+        color="#d62728", label=f"Forgotten Class {forget_class} (D_f)",
+        marker="o", s=38, edgecolors="#800000", linewidths=0.8, alpha=0.85
     )
+
+    # ------------------------------------------------------------------
+    # Compute and plot Global Mean and directional vectors to Class Means
+    # (Matches Neural Collapse / Simplex ETF geometry & Figure 2 of paper)
+    # ------------------------------------------------------------------
+    class_means_2d = {}
+    for c in range(num_classes):
+        c_mask = (y == c)
+        if c_mask.sum() > 0:
+            class_means_2d[c] = X_2d[c_mask].mean(axis=0)
+
+    if len(class_means_2d) > 0:
+        # Global mean in 2D projection space
+        global_mean_2d = np.mean(list(class_means_2d.values()), axis=0)
+
+        # Plot Global Mean point (prominent star marker)
+        plt.scatter(
+            global_mean_2d[0], global_mean_2d[1],
+            color="black", marker="*", s=260, edgecolors="gold", linewidths=1.5,
+            zorder=6, label="Global Mean (z̄)"
+        )
+
+        # Draw directional arrows from Global Mean to each Class Mean
+        for c, mu_c in class_means_2d.items():
+            dx = mu_c[0] - global_mean_2d[0]
+            dy = mu_c[1] - global_mean_2d[1]
+            dist = np.sqrt(dx**2 + dy**2)
+            if dist < 1e-6:
+                continue
+
+            is_f_class = (c == forget_class)
+            arrow_color = "#d62728" if is_f_class else cmap(c % 10)
+            linestyle = "--" if is_f_class else "-"
+            alpha = 0.95 if is_f_class else 0.70
+            hw = 0.25 if is_f_class else 0.18
+            hl = 0.35 if is_f_class else 0.25
+
+            # Arrow pointing from global mean to class mean
+            plt.arrow(
+                global_mean_2d[0], global_mean_2d[1],
+                dx * 0.92, dy * 0.92,
+                color=arrow_color, alpha=alpha, width=0.02,
+                head_width=hw, head_length=hl, length_includes_head=True,
+                linestyle=linestyle, zorder=5
+            )
+
+            # Mark class centroid
+            plt.scatter(
+                mu_c[0], mu_c[1],
+                color=arrow_color, marker="D", s=45, edgecolors="black", linewidths=0.8,
+                zorder=6
+            )
+            # Label class centroid
+            label_text = f"z̄_{c} (Forget)" if is_f_class else f"z̄_{c}"
+            plt.text(
+                mu_c[0] + dx * 0.06, mu_c[1] + dy * 0.06, label_text,
+                color=arrow_color, fontsize=10, fontweight="bold",
+                ha="center", va="center", zorder=7
+            )
 
     plt.title(title, fontsize=13, fontweight="bold")
     plt.xlabel(xlabel, fontsize=11)
