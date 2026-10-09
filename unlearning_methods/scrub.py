@@ -35,13 +35,14 @@ def unlearn_scrub(
     momentum: float = 0.9,
     weight_decay: float = 5e-4,
     device: str = "cuda",
+    retain_finetune: bool = False,
 ) -> nn.Module:
     """
     SCRUB (Student-Teacher Relabeling & Unlearning Bound).
     
     Source: Kurmanji et al. (Towards Unbounded Machine Unlearning, NeurIPS 2023).
     - Maximizes KL divergence on forget set (for the first msteps epochs): loss = -KL(student, teacher).
-    - Minimizes weighted combination on retain set: loss = gamma * CE(student, targets) + alpha * KL(student, teacher).
+    - Minimizes weighted combination on retain set when retain_finetune=True.
     """
     model.to(device)
     teacher = copy.deepcopy(model).eval()
@@ -70,25 +71,26 @@ def unlearn_scrub(
                 loss_forget.backward()
                 optimizer.step()
 
-        # Phase 2: Minimize divergence & standard classification loss on Retain set
-        student.train()
-        for images, targets in retain_loader:
-            images = images.to(device)
-            if not isinstance(targets, torch.Tensor):
-                targets = torch.tensor(targets, device=device)
-            else:
-                targets = targets.to(device)
+        # Phase 2: Optional minimize divergence & standard classification loss on Retain set
+        if retain_finetune:
+            student.train()
+            for images, targets in retain_loader:
+                images = images.to(device)
+                if not isinstance(targets, torch.Tensor):
+                    targets = torch.tensor(targets, device=device)
+                else:
+                    targets = targets.to(device)
 
-            with torch.no_grad():
-                t_out = teacher(images)
-            s_out = student(images)
+                with torch.no_grad():
+                    t_out = teacher(images)
+                s_out = student(images)
 
-            loss_cls = criterion_cls(s_out, targets)
-            loss_div = criterion_kd(s_out, t_out)
-            loss_retain = gamma * loss_cls + alpha * loss_div
+                loss_cls = criterion_cls(s_out, targets)
+                loss_div = criterion_kd(s_out, t_out)
+                loss_retain = gamma * loss_cls + alpha * loss_div
 
-            optimizer.zero_grad()
-            loss_retain.backward()
-            optimizer.step()
+                optimizer.zero_grad()
+                loss_retain.backward()
+                optimizer.step()
 
     return student

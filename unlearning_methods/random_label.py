@@ -14,12 +14,13 @@ def unlearn_random_label(
     momentum: float = 0.9,
     weight_decay: float = 5e-4,
     device: str = "cuda",
+    retain_finetune: bool = False,
 ) -> nn.Module:
     """
     Random Label (RL) Unlearning baseline (Golatkar et al., CVPR 2020 / OPTML Group).
     
-    Iteratively trains on the forget set with uniformly randomized labels,
-    followed by fine-tuning on the retain set with true labels.
+    Iteratively trains on the forget set with uniformly randomized labels.
+    Retain fine-tuning is controlled via retain_finetune (default False).
     """
     model.to(device)
     model.train()
@@ -39,18 +40,19 @@ def unlearn_random_label(
             loss.backward()
             optimizer.step()
 
-        # 2. Update on retain set using true ground truth labels
-        for images, targets in retain_loader:
-            images = images.to(device)
-            if not isinstance(targets, torch.Tensor):
-                targets = torch.tensor(targets, device=device)
-            else:
-                targets = targets.to(device)
+        # 2. Optional update on retain set using true ground truth labels
+        if retain_finetune:
+            for images, targets in retain_loader:
+                images = images.to(device)
+                if not isinstance(targets, torch.Tensor):
+                    targets = torch.tensor(targets, device=device)
+                else:
+                    targets = targets.to(device)
 
-            optimizer.zero_grad()
-            outputs = model(images)
-            loss = criterion(outputs, targets)
-            loss.backward()
-            optimizer.step()
+                optimizer.zero_grad()
+                outputs = model(images)
+                loss = criterion(outputs, targets)
+                loss.backward()
+                optimizer.step()
 
     return model

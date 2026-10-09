@@ -16,12 +16,14 @@ def unlearn_neggrad_plus(
     momentum: float = 0.9,
     weight_decay: float = 5e-4,
     device: str = "cuda",
+    retain_finetune: bool = False,
 ) -> nn.Module:
     """
-    NegGrad+ (Gradient Ascent on Forget + Gradient Descent on Retain).
+    NegGrad+ (Gradient Ascent on Forget + Optional Gradient Descent on Retain).
     
     Source: Kurmanji et al. (SCRUB repo / repdistiller helper loops `train_negrad`).
-    Loss formulation: loss = alpha * loss_retain - (1.0 - alpha) * loss_forget.
+    When retain_finetune=False: performs pure gradient ascent on the forget set: loss = -loss_forget.
+    When retain_finetune=True: loss = alpha * loss_retain - (1.0 - alpha) * loss_forget.
     """
     model.to(device)
     model.train()
@@ -30,29 +32,45 @@ def unlearn_neggrad_plus(
     optimizer = optim.SGD(trainable_params, lr=lr, momentum=momentum, weight_decay=weight_decay)
 
     for epoch in range(epochs):
-        for (x_r, y_r), (x_f, y_f) in zip(retain_loader, cycle(forget_loader)):
-            x_r = x_r.to(device)
-            if not isinstance(y_r, torch.Tensor):
-                y_r = torch.tensor(y_r, device=device)
-            else:
-                y_r = y_r.to(device)
+        if not retain_finetune:
+            # Pure gradient ascent on forget set
+            for x_f, y_f in forget_loader:
+                x_f = x_f.to(device)
+                if not isinstance(y_f, torch.Tensor):
+                    y_f = torch.tensor(y_f, device=device)
+                else:
+                    y_f = y_f.to(device)
 
-            x_f = x_f.to(device)
-            if not isinstance(y_f, torch.Tensor):
-                y_f = torch.tensor(y_f, device=device)
-            else:
-                y_f = y_f.to(device)
+                optimizer.zero_grad()
+                out_f = model(x_f)
+                loss_f = criterion(out_f, y_f)
+                loss = -loss_f  # Maximize forget loss
+                loss.backward()
+                optimizer.step()
+        else:
+            for (x_r, y_r), (x_f, y_f) in zip(retain_loader, cycle(forget_loader)):
+                x_r = x_r.to(device)
+                if not isinstance(y_r, torch.Tensor):
+                    y_r = torch.tensor(y_r, device=device)
+                else:
+                    y_r = y_r.to(device)
 
-            optimizer.zero_grad()
-            out_r = model(x_r)
-            out_f = model(x_f)
+                x_f = x_f.to(device)
+                if not isinstance(y_f, torch.Tensor):
+                    y_f = torch.tensor(y_f, device=device)
+                else:
+                    y_f = y_f.to(device)
 
-            loss_r = criterion(out_r, y_r)
-            loss_f = criterion(out_f, y_f)
+                optimizer.zero_grad()
+                out_r = model(x_r)
+                out_f = model(x_f)
 
-            # Maximize forget loss (negative sign) and minimize retain loss
-            loss = alpha * loss_r - (1.0 - alpha) * loss_f
-            loss.backward()
-            optimizer.step()
+                loss_r = criterion(out_r, y_r)
+                loss_f = criterion(out_f, y_f)
+
+                # Maximize forget loss (negative sign) and minimize retain loss
+                loss = alpha * loss_r - (1.0 - alpha) * loss_f
+                loss.backward()
+                optimizer.step()
 
     return model

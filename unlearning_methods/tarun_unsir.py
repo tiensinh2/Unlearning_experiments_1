@@ -9,7 +9,7 @@ from torch.utils.data import DataLoader
 def unlearn_tarun_unsir(
     model: nn.Module,
     retain_loader: DataLoader,
-    forget_loader: Optional[DataLoader] = None,
+    forget_loader: DataLoader,
     forget_classes: Optional[Sequence[int]] = None,
     num_classes: int = 10,
     img_shape: Tuple[int, int, int] = (3, 32, 32),
@@ -22,6 +22,7 @@ def unlearn_tarun_unsir(
     repair_lr: float = 0.01,
     repair_epochs: int = 1,
     device: str = "cuda",
+    retain_finetune: bool = False,
 ) -> nn.Module:
     """
     UNSIR / TarUn (Fast Machine Unlearning via Error-Maximizing Impair-Repair).
@@ -93,15 +94,16 @@ def unlearn_tarun_unsir(
     # ------------------------------------------------------------------
     # Collect a retain sample subset for the impair mix.
     retain_samples = []
-    for images, targets in retain_loader:
-        if not isinstance(targets, torch.Tensor):
-            targets = torch.tensor(targets)
-        for img, tgt in zip(images, targets):
-            retain_samples.append((img, tgt))
-        if len(retain_samples) >= batch_sz * impair_batches:
-            break
+    if retain_finetune:
+        for images, targets in retain_loader:
+            if not isinstance(targets, torch.Tensor):
+                targets = torch.tensor(targets)
+            for img, tgt in zip(images, targets):
+                retain_samples.append((img, tgt))
+            if len(retain_samples) >= batch_sz * impair_batches:
+                break
 
-    # Build impair dataset: all noise tensors (pseudo-label 0) + retain samples.
+    # Build impair dataset: all noise tensors (pseudo-label 0) + optional retain samples.
     impair_data = []
     pseudo_label = torch.tensor(0, dtype=torch.long)
     for cls in forget_classes:
@@ -130,20 +132,21 @@ def unlearn_tarun_unsir(
     # ------------------------------------------------------------------
     # Step 3: Repair Step (Fine-tuning on Retain Set only — D_F / D_V / D_T never used)
     # ------------------------------------------------------------------
-    trainable_repair = [p for p in model.parameters() if p.requires_grad]
-    optimizer_repair = optim.Adam(trainable_repair, lr=repair_lr)
+    if retain_finetune:
+        trainable_repair = [p for p in model.parameters() if p.requires_grad]
+        optimizer_repair = optim.Adam(trainable_repair, lr=repair_lr)
 
-    for _ in range(repair_epochs):
-        for images, targets in retain_loader:
-            images = images.to(device)
-            if not isinstance(targets, torch.Tensor):
-                targets = torch.tensor(targets, device=device)
-            else:
-                targets = targets.to(device)
-            optimizer_repair.zero_grad()
-            outputs = model(images)
-            loss = F.cross_entropy(outputs, targets)
-            loss.backward()
-            optimizer_repair.step()
+        for _ in range(repair_epochs):
+            for images, targets in retain_loader:
+                images = images.to(device)
+                if not isinstance(targets, torch.Tensor):
+                    targets = torch.tensor(targets, device=device)
+                else:
+                    targets = targets.to(device)
+                optimizer_repair.zero_grad()
+                outputs = model(images)
+                loss = F.cross_entropy(outputs, targets)
+                loss.backward()
+                optimizer_repair.step()
 
     return model
