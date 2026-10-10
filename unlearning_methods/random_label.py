@@ -14,13 +14,13 @@ def unlearn_random_label(
     momentum: float = 0.9,
     weight_decay: float = 5e-4,
     device: str = "cuda",
-    retain_finetune: bool = False,
+    retain_finetune: bool = True,
 ) -> nn.Module:
     """
     Random Label (RL) Unlearning baseline (Golatkar et al., CVPR 2020 / OPTML Group).
     
-    Iteratively trains on the forget set with uniformly randomized labels.
-    Retain fine-tuning is controlled via retain_finetune (default False).
+    Iteratively trains on the forget set with uniformly randomized labels,
+    followed by fine-tuning on the retain set with true labels (controlled by retain_finetune, default True).
     """
     model.to(device)
     model.train()

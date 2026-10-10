@@ -16,14 +16,14 @@ def unlearn_neggrad_plus(
     momentum: float = 0.9,
     weight_decay: float = 5e-4,
     device: str = "cuda",
-    retain_finetune: bool = False,
+    retain_finetune: bool = True,
 ) -> nn.Module:
     """
-    NegGrad+ (Gradient Ascent on Forget + Optional Gradient Descent on Retain).
+    NegGrad+ (Gradient Ascent on Forget + Gradient Descent on Retain).
     
     Source: Kurmanji et al. (SCRUB repo / repdistiller helper loops `train_negrad`).
+    When retain_finetune=True (default): loss = alpha * loss_retain - (1.0 - alpha) * loss_forget.
     When retain_finetune=False: performs pure gradient ascent on the forget set: loss = -loss_forget.
-    When retain_finetune=True: loss = alpha * loss_retain - (1.0 - alpha) * loss_forget.
     """
     model.to(device)
     model.train()

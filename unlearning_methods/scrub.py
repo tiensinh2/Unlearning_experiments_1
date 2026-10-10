@@ -35,14 +35,14 @@ def unlearn_scrub(
     momentum: float = 0.9,
     weight_decay: float = 5e-4,
     device: str = "cuda",
-    retain_finetune: bool = False,
+    retain_finetune: bool = True,
 ) -> nn.Module:
     """
     SCRUB (Student-Teacher Relabeling & Unlearning Bound).
     
     Source: Kurmanji et al. (Towards Unbounded Machine Unlearning, NeurIPS 2023).
     - Maximizes KL divergence on forget set (for the first msteps epochs): loss = -KL(student, teacher).
-    - Minimizes weighted combination on retain set when retain_finetune=True.
+    - Minimizes weighted combination on retain set (controlled via retain_finetune, default True).
     """
     model.to(device)
     teacher = copy.deepcopy(model).eval()

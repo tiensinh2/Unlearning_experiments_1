@@ -22,7 +22,7 @@ def unlearn_tarun_unsir(
     repair_lr: float = 0.01,
     repair_epochs: int = 1,
     device: str = "cuda",
-    retain_finetune: bool = False,
+    retain_finetune: bool = True,
 ) -> nn.Module:
     """
     UNSIR / TarUn (Fast Machine Unlearning via Error-Maximizing Impair-Repair).

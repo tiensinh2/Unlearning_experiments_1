@@ -101,12 +101,12 @@ def unlearn_salun(
     momentum: float = 0.9,
     weight_decay: float = 5e-4,
     device: str = "cuda",
-    retain_finetune: bool = False,
+    retain_finetune: bool = True,
 ) -> nn.Module:
     """
     SalUn (Saliency-Guided Unlearning with Random Labeling).
     Only updates parameters with highest saliency while keeping remaining parameters intact.
-    Retain fine-tuning is controlled via retain_finetune (default False).
+    Retain fine-tuning is controlled via retain_finetune (default True).
     """
     mask = generate_salun_mask(model, forget_loader, threshold=threshold, device=device)
     theta0 = {name: param.detach().clone() for name, param in model.named_parameters()}
