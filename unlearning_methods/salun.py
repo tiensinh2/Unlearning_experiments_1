@@ -1,4 +1,4 @@
-from typing import Dict
+from typing import Callable, Dict, Optional
 import torch
 import torch.nn as nn
 import torch.optim as optim
@@ -20,10 +20,11 @@ def _restore_masked_params(
 ) -> None:
     """
     Restores unselected weights back to initial snapshot theta0 and clears momentum buffer.
+    Frozen parameters (requires_grad=False, e.g. a CMF head rebuilt each epoch) are left untouched.
     """
     with torch.no_grad():
         for name, param in model.named_parameters():
-            if name not in mask:
+            if name not in mask or not param.requires_grad:
                 continue
             mask_tensor = mask[name].to(device=param.device, dtype=param.dtype)
             inv_mask_tensor = 1.0 - mask_tensor
@@ -96,17 +97,19 @@ def unlearn_salun(
     forget_loader: DataLoader,
     num_classes: int,
     threshold: float = 0.5,
-    lr: float = 1e-4,
-    epochs: int = 3,
+    lr: float = 0.013,
+    epochs: int = 10,
     momentum: float = 0.9,
     weight_decay: float = 5e-4,
     device: str = "cuda",
     retain_finetune: bool = True,
+    epoch_end_callback: Optional[Callable[[nn.Module], None]] = None,
 ) -> nn.Module:
     """
     SalUn (Saliency-Guided Unlearning with Random Labeling).
     Only updates parameters with highest saliency while keeping remaining parameters intact.
     Retain fine-tuning is controlled via retain_finetune (default True).
+    epoch_end_callback(model) is called after every epoch (e.g. CMF head reconstruction, Alg. 2 line 7).
     """
     mask = generate_salun_mask(model, forget_loader, threshold=threshold, device=device)
     theta0 = {name: param.detach().clone() for name, param in model.named_parameters()}
@@ -144,5 +147,9 @@ def unlearn_salun(
                 _apply_mask_to_grads(model, mask)
                 optimizer.step()
                 _restore_masked_params(model, mask, theta0, optimizer)
+
+        if epoch_end_callback is not None:
+            epoch_end_callback(model)
+            model.train()
 
     return model

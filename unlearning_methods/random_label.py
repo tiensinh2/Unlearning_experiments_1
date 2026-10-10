@@ -1,3 +1,4 @@
+from typing import Callable, Optional
 import torch
 import torch.nn as nn
 import torch.optim as optim
@@ -9,18 +10,20 @@ def unlearn_random_label(
     retain_loader: DataLoader,
     forget_loader: DataLoader,
     num_classes: int,
-    lr: float = 1e-4,
-    epochs: int = 3,
+    lr: float = 0.013,
+    epochs: int = 10,
     momentum: float = 0.9,
     weight_decay: float = 5e-4,
     device: str = "cuda",
     retain_finetune: bool = True,
+    epoch_end_callback: Optional[Callable[[nn.Module], None]] = None,
 ) -> nn.Module:
     """
     Random Label (RL) Unlearning baseline (Golatkar et al., CVPR 2020 / OPTML Group).
     
     Iteratively trains on the forget set with uniformly randomized labels,
     followed by fine-tuning on the retain set with true labels (controlled by retain_finetune, default True).
+    epoch_end_callback(model) is called after every epoch (e.g. CMF head reconstruction, Alg. 2 line 7).
     """
     model.to(device)
     model.train()
@@ -54,5 +57,9 @@ def unlearn_random_label(
                 loss = criterion(outputs, targets)
                 loss.backward()
                 optimizer.step()
+
+        if epoch_end_callback is not None:
+            epoch_end_callback(model)
+            model.train()
 
     return model

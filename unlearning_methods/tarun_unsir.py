@@ -1,4 +1,4 @@
-from typing import Optional, Sequence, Tuple
+from typing import Callable, Optional, Sequence, Tuple
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -16,13 +16,14 @@ def unlearn_tarun_unsir(
     noise_lr: float = 0.1,
     noise_epochs: int = 5,
     noise_steps: int = 8,
-    impair_lr: float = 0.01,
+    impair_lr: float = 0.02,
     impair_epochs: int = 1,
     impair_batches: int = 20,
-    repair_lr: float = 0.005,
+    repair_lr: float = 0.01,
     repair_epochs: int = 1,
     device: str = "cuda",
     retain_finetune: bool = True,
+    epoch_end_callback: Optional[Callable[[nn.Module], None]] = None,
 ) -> nn.Module:
     """
     UNSIR / TarUn (Fast Machine Unlearning via Error-Maximizing Impair-Repair).
@@ -33,9 +34,12 @@ def unlearn_tarun_unsir(
     1. Error-maximizing noise optimization:
        Learns class-wise noise tensor per forgotten class minimizing -CE(y_forget) + 0.1 * ||noise||_2^2.
     2. Impair phase:
-       Perturbs weights using synthesized noise labeled with pseudo class 0 (or retain mix) with Adam optimizer.
+       Perturbs weights using synthesized noise labeled with its forget class (plus retain mix) with Adam optimizer.
     3. Repair phase:
        Restores retain accuracy through brief fine-tuning on retain data with Adam optimizer.
+
+    epoch_end_callback(model) is called after every impair and repair epoch
+    (e.g. CMF head reconstruction, Alg. 2 line 7).
 
     Notes on random-subset unlearning:
     ------------------------------------
@@ -103,14 +107,15 @@ def unlearn_tarun_unsir(
             if len(retain_samples) >= batch_sz * impair_batches:
                 break
 
-    # Build impair dataset: all noise tensors (pseudo-label 0) + optional retain samples.
+    # Build impair dataset: each noise tensor labeled with the class it was optimized for
+    # (as in the official UNSIR implementation) + optional retain samples.
     impair_data = []
-    pseudo_label = torch.tensor(0, dtype=torch.long)
     for cls in forget_classes:
         noise_tensor = noises[cls].cpu()
+        noise_label = torch.tensor(cls, dtype=torch.long)
         for _ in range(impair_batches):
             for idx in range(noise_tensor.size(0)):
-                impair_data.append((noise_tensor[idx], pseudo_label))
+                impair_data.append((noise_tensor[idx], noise_label))
 
     impair_data.extend(retain_samples)
 
@@ -128,6 +133,9 @@ def unlearn_tarun_unsir(
             loss = F.cross_entropy(outputs, labels)
             loss.backward()
             optimizer_impair.step()
+        if epoch_end_callback is not None:
+            epoch_end_callback(model)
+            model.train()
 
     # ------------------------------------------------------------------
     # Step 3: Repair Step (Fine-tuning on Retain Set only — D_F / D_V / D_T never used)
@@ -148,5 +156,8 @@ def unlearn_tarun_unsir(
                 loss = F.cross_entropy(outputs, targets)
                 loss.backward()
                 optimizer_repair.step()
+            if epoch_end_callback is not None:
+                epoch_end_callback(model)
+                model.train()
 
     return model

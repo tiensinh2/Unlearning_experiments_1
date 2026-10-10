@@ -1,3 +1,4 @@
+from typing import Callable, Optional
 import copy
 from itertools import cycle
 import torch
@@ -11,12 +12,13 @@ def unlearn_neggrad_plus(
     retain_loader: DataLoader,
     forget_loader: DataLoader,
     alpha: float = 0.5,
-    lr: float = 1e-4,
-    epochs: int = 3,
+    lr: float = 0.01,
+    epochs: int = 10,
     momentum: float = 0.9,
     weight_decay: float = 5e-4,
     device: str = "cuda",
     retain_finetune: bool = True,
+    epoch_end_callback: Optional[Callable[[nn.Module], None]] = None,
 ) -> nn.Module:
     """
     NegGrad+ (Gradient Ascent on Forget + Gradient Descent on Retain).
@@ -24,6 +26,7 @@ def unlearn_neggrad_plus(
     Source: Kurmanji et al. (SCRUB repo / repdistiller helper loops `train_negrad`).
     When retain_finetune=True (default): loss = alpha * loss_retain - (1.0 - alpha) * loss_forget.
     When retain_finetune=False: performs pure gradient ascent on the forget set: loss = -loss_forget.
+    epoch_end_callback(model) is called after every epoch (e.g. CMF head reconstruction, Alg. 2 line 7).
     """
     model.to(device)
     model.train()
@@ -72,5 +75,9 @@ def unlearn_neggrad_plus(
                 loss = alpha * loss_r - (1.0 - alpha) * loss_f
                 loss.backward()
                 optimizer.step()
+
+        if epoch_end_callback is not None:
+            epoch_end_callback(model)
+            model.train()
 
     return model

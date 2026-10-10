@@ -603,6 +603,48 @@ def evaluate_three_tier_metrics(
 
 
 # ==============================================================================
+# 3b. CMF Classifier Head (Gao et al., arXiv:2604.08271v1, Eq. 3/7 and Algorithm 1)
+# ==============================================================================
+
+@torch.no_grad()
+def reconstruct_cmf_head(
+    model: FullClassifier,
+    dataloader: DataLoader,
+    num_classes: int = 10,
+    device: str = "cuda",
+) -> None:
+    """
+    CMF Head Reconstruction (Algorithm 1), in-place on model.head.linear:
+      mu_k  = mean_{(x,y) in D_k} z_theta(x)                     (Eq. 3)
+      mu_bar = (1/K) sum_k mu_k                                    (Eq. 3, mean of class means)
+      w_k   = (mu_k - mu_bar) / ||mu_k - mu_bar||                  (Alg. 1, line 6)
+      W_CMF = [w_1, ..., w_K], frozen                             (Alg. 1, lines 8-9)
+    The paper's head is W_CMF only, so the bias is set to 0 (f(x) = W_CMF z_theta(x)).
+    Classes absent from `dataloader` are excluded from mu_bar and get a zero weight row.
+    """
+    feats, targets = extract_features(model.encoder, dataloader, device=device)
+    class_means = np.zeros((num_classes, feats.shape[1]), dtype=np.float64)
+    present = np.zeros(num_classes, dtype=bool)
+    for c in range(num_classes):
+        mask = (targets == c)
+        if mask.sum() > 0:
+            class_means[c] = feats[mask].mean(axis=0)
+            present[c] = True
+
+    global_mean = class_means[present].mean(axis=0, keepdims=True)
+    weights = np.zeros_like(class_means)
+    centered = class_means[present] - global_mean
+    weights[present] = centered / (np.linalg.norm(centered, axis=1, keepdims=True) + 1e-8)
+
+    linear = model.head.linear
+    linear.weight.data.copy_(torch.tensor(weights, dtype=linear.weight.dtype, device=linear.weight.device))
+    linear.weight.requires_grad = False
+    if linear.bias is not None:
+        linear.bias.data.zero_()
+        linear.bias.requires_grad = False
+
+
+# ==============================================================================
 # 4. Feature Space Visualization (t-SNE & Grouped Metric Bar Charts)
 # ==============================================================================
 
@@ -611,7 +653,7 @@ def visualize_feature_space_and_boundaries(
     retain_loader: DataLoader,
     forget_loader: DataLoader,
     num_classes: int = 10,
-    forget_class: int = 0,
+    forget_class: Optional[int] = None,
     title: str = "t-SNE Feature Space Visualization",
     max_samples_per_class: int = 100,
     device: str = "cuda",
@@ -624,8 +666,11 @@ def visualize_feature_space_and_boundaries(
     1. Extracts high-dimensional representations for retain & forget samples.
     2. Applies L2 normalization (as in Figure 6 of paper).
     3. Projects to 2D via t-SNE (or PCA if requested).
-    4. Plots retain classes (pastel/tab10 points) and forget class (distinct highlighted points)
+    4. Plots retain classes (pastel/tab10 points) and forget samples (distinct highlighted points)
        to show whether forget representations remain linearly separable or collapse/overlap with retain.
+
+    forget_class: set only for whole-class unlearning (D_F == one class). Leave None for
+    random-subset unlearning, where D_F contains samples of every class.
     """
     import matplotlib.pyplot as plt
     from sklearn.manifold import TSNE
@@ -705,9 +750,10 @@ def visualize_feature_space_and_boundaries(
 
     # Plot forget samples (highlighted in red, matching Figure 6 of paper)
     forget_mask = is_f
+    forget_label = f"Forgotten Class {forget_class} (D_f)" if forget_class is not None else "Forget Set (D_f, all classes)"
     plt.scatter(
         X_2d[forget_mask, 0], X_2d[forget_mask, 1],
-        color="#d62728", label=f"Forgotten Class {forget_class} (D_f)",
+        color="#d62728", label=forget_label,
         marker="o", s=38, edgecolors="#800000", linewidths=0.8, alpha=0.85
     )
 
@@ -715,9 +761,10 @@ def visualize_feature_space_and_boundaries(
     # Compute and plot Global Mean and directional vectors to Class Means
     # (Matches Neural Collapse / Simplex ETF geometry & Figure 2 of paper)
     # ------------------------------------------------------------------
+    # Class means are computed from retain samples only so forget samples do not bias them.
     class_means_2d = {}
     for c in range(num_classes):
-        c_mask = (y == c)
+        c_mask = retain_mask & (y == c)
         if c_mask.sum() > 0:
             class_means_2d[c] = X_2d[c_mask].mean(axis=0)
 
@@ -892,3 +939,231 @@ def print_metrics_summary_table(
         df.to_csv(save_csv_path, index=False)
         print(f"Summary table saved to: {save_csv_path}")
     return df
+
+
+# ==============================================================================
+# 5. Class-Mean Geometry: Global-Mean -> Class-Mean Direction Vectors
+# ==============================================================================
+
+def _class_means(feats: np.ndarray, targets: np.ndarray, num_classes: int) -> Tuple[np.ndarray, np.ndarray]:
+    """Returns per-class mean features [C, D] and a boolean mask of classes present."""
+    means = np.zeros((num_classes, feats.shape[1]), dtype=np.float64)
+    present = np.zeros(num_classes, dtype=bool)
+    for c in range(num_classes):
+        mask = (targets == c)
+        if mask.sum() > 0:
+            means[c] = feats[mask].mean(axis=0)
+            present[c] = True
+    return means, present
+
+
+def compute_class_mean_geometry(
+    model: nn.Module,
+    retain_loader: DataLoader,
+    forget_loader: Optional[DataLoader] = None,
+    num_classes: int = 10,
+    device: str = "cuda",
+) -> Dict[str, np.ndarray]:
+    """
+    Computes direction vectors from the global mean to each class mean in encoder feature space.
+
+    - global_mean = mean of the retain class means (class-balanced, same definition as the CMF head).
+    - retain_directions[c] = mean(h | D_R, y=c) - global_mean
+    - forget_directions[c] = mean(h | D_F, y=c) - global_mean  (same retain global mean, so both
+      sets of vectors live in the same centered coordinate frame)
+    """
+    encoder = getattr(model, "encoder", model)
+    r_feats, r_targets = extract_features(encoder, retain_loader, device=device)
+    r_means, r_present = _class_means(r_feats, r_targets, num_classes)
+    global_mean = r_means[r_present].mean(axis=0)
+
+    geom = {
+        "global_mean": global_mean,
+        "retain_class_means": r_means,
+        "retain_directions": r_means - global_mean,
+        "retain_present": r_present,
+    }
+    if forget_loader is not None:
+        f_feats, f_targets = extract_features(encoder, forget_loader, device=device)
+        f_means, f_present = _class_means(f_feats, f_targets, num_classes)
+        geom["forget_class_means"] = f_means
+        geom["forget_directions"] = f_means - global_mean
+        geom["forget_present"] = f_present
+    return geom
+
+
+def save_class_mean_geometry(geom: Dict[str, np.ndarray], path: str) -> None:
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    np.savez(path, **geom)
+
+
+def load_class_mean_geometry(path: str) -> Dict[str, np.ndarray]:
+    with np.load(path) as data:
+        return {k: data[k] for k in data.files}
+
+
+def load_oracle_geometry(
+    model_name: str,
+    seed: int,
+    search_dirs: Tuple[str, ...] = ("./artifacts/metrics", "/kaggle/input"),
+) -> Dict[str, np.ndarray]:
+    """Loads the Oracle reference geometry saved by 02_oracle_retrain.ipynb (searched recursively)."""
+    import glob
+
+    fname = f"oracle_geometry_{model_name}_seed_{seed}.npz"
+    for d in search_dirs:
+        direct = os.path.join(d, fname)
+        if os.path.exists(direct):
+            return load_class_mean_geometry(direct)
+        if os.path.isdir(d):
+            hits = glob.glob(os.path.join(d, "**", fname), recursive=True)
+            if hits:
+                return load_class_mean_geometry(hits[0])
+    raise FileNotFoundError(f"Oracle geometry '{fname}' not found in {search_dirs}. Run 02_oracle_retrain.ipynb first.")
+
+
+def _cosine_matrix(X: np.ndarray) -> np.ndarray:
+    Xn = X / (np.linalg.norm(X, axis=1, keepdims=True) + 1e-12)
+    return Xn @ Xn.T
+
+
+def _direction_set_metrics(A: np.ndarray, B: np.ndarray, present: np.ndarray) -> Dict[str, object]:
+    """Per-class and aggregate comparison of aligned directions A against reference directions B."""
+    A, B = A[present], B[present]
+    a_norm = np.linalg.norm(A, axis=1)
+    b_norm = np.linalg.norm(B, axis=1) + 1e-12
+    cos = np.sum(A * B, axis=1) / (a_norm * b_norm + 1e-12)
+    norm_ratio = a_norm / b_norm
+    rel_dist = np.linalg.norm(A - B, axis=1) / b_norm
+    angle_deg = np.degrees(np.arccos(np.clip(cos, -1.0, 1.0)))
+    return {
+        "cos_mean": float(cos.mean()),
+        "cos_min": float(cos.min()),
+        "angle_deg_mean": float(angle_deg.mean()),
+        "norm_ratio_mean": float(norm_ratio.mean()),
+        "rel_dist_mean": float(rel_dist.mean()),
+        "per_class_cos": cos.tolist(),
+        "per_class_angle_deg": angle_deg.tolist(),
+        "per_class_norm_ratio": norm_ratio.tolist(),
+        "per_class_rel_dist": rel_dist.tolist(),
+    }
+
+
+def compare_class_mean_geometry(
+    geom: Dict[str, np.ndarray],
+    ref_geom: Dict[str, np.ndarray],
+) -> Dict[str, object]:
+    """
+    Compares a model's global-mean -> class-mean directions with a reference (Oracle on D_R).
+
+    Different models have different (arbitrarily rotated) feature bases, so raw coordinates are not
+    comparable. The model's retain directions are first aligned to the reference retain directions
+    with an orthogonal Procrustes rotation R (angles and lengths are preserved by R). The same R is
+    applied to the forget directions.
+
+    Returned metrics (per set "retain" / "forget"):
+      cos_mean / cos_min / angle_deg_mean : directional agreement per class after alignment (1 / 0deg = identical)
+      norm_ratio_mean                     : ||v_c|| / ||v_ref_c||  (1 = same class-separation scale)
+      rel_dist_mean                       : ||v_c R - v_ref_c|| / ||v_ref_c||  (0 = identical)
+    Plus rotation-free metrics on retain:
+      procrustes_disparity : squared residual after alignment of Frobenius-normalized sets, in [0, 2]
+      gram_cos_mae         : mean |cos(v_i, v_j) - cos(v_ref_i, v_ref_j)|  (no alignment needed)
+    """
+    B = ref_geom["retain_directions"]
+    A = geom["retain_directions"]
+    if A.shape != B.shape:
+        raise ValueError(f"Geometry shape mismatch {A.shape} vs reference {B.shape} (different architectures?)")
+    present = geom["retain_present"].astype(bool) & ref_geom["retain_present"].astype(bool)
+
+    # Orthogonal Procrustes: R = argmin ||A R - B||_F  s.t. R^T R = I
+    U, _, Vt = np.linalg.svd(A[present].T @ B[present], full_matrices=False)
+    R = U @ Vt
+    A_aligned = A @ R
+
+    res: Dict[str, object] = {"retain": _direction_set_metrics(A_aligned, B, present)}
+
+    A_n = A[present] / (np.linalg.norm(A[present]) + 1e-12)
+    B_n = B[present] / (np.linalg.norm(B[present]) + 1e-12)
+    U2, _, Vt2 = np.linalg.svd(A_n.T @ B_n, full_matrices=False)
+    res["retain"]["procrustes_disparity"] = float(np.sum((A_n @ (U2 @ Vt2) - B_n) ** 2))
+    res["retain"]["gram_cos_mae"] = float(
+        np.mean(np.abs(_cosine_matrix(A[present]) - _cosine_matrix(B[present])))
+    )
+
+    if "forget_directions" in geom:
+        f_present = present & geom["forget_present"].astype(bool)
+        res["forget"] = _direction_set_metrics(geom["forget_directions"] @ R, B, f_present)
+    return res
+
+
+def print_geometry_summary_table(
+    results: List[Dict],
+    title: str = "Class-Mean Direction Geometry vs Oracle (D_R)",
+    save_csv_path: Optional[str] = None,
+):
+    """
+    Prints per-run rows and a per-method aggregate (mean ± std over seeds) of the
+    class-mean direction comparison stored under result["geometry_vs_oracle"].
+    """
+    import pandas as pd
+
+    rows = []
+    for r in results:
+        g = r.get("geometry_vs_oracle")
+        if g is None:
+            continue
+        row = {
+            "Method": r.get("method") or r.get("variant") or "unknown",
+            "Model": r.get("model_name", "resnet18"),
+            "Seed": r.get("seed", 0),
+            "R cos": g["retain"]["cos_mean"],
+            "R angle(deg)": g["retain"]["angle_deg_mean"],
+            "R norm ratio": g["retain"]["norm_ratio_mean"],
+            "R rel dist": g["retain"]["rel_dist_mean"],
+            "R procrustes": g["retain"]["procrustes_disparity"],
+            "R gram MAE": g["retain"]["gram_cos_mae"],
+        }
+        if "forget" in g:
+            row.update({
+                "F cos": g["forget"]["cos_mean"],
+                "F angle(deg)": g["forget"]["angle_deg_mean"],
+                "F norm ratio": g["forget"]["norm_ratio_mean"],
+                "F rel dist": g["forget"]["rel_dist_mean"],
+            })
+        rows.append(row)
+
+    df = pd.DataFrame(rows)
+    if df.empty:
+        print("No geometry results to summarize.")
+        return df
+
+    metric_cols = [c for c in df.columns if c not in ("Method", "Model", "Seed")]
+    agg = df.groupby(["Method", "Model"], sort=False)[metric_cols].agg(["mean", "std"])
+    agg_fmt = pd.DataFrame(index=agg.index)
+    for c in metric_cols:
+        agg_fmt[c] = [
+            f"{m:.4f} ± {0.0 if np.isnan(s) else s:.4f}" for m, s in zip(agg[(c, "mean")], agg[(c, "std")])
+        ]
+    agg_fmt = agg_fmt.reset_index()
+
+    def _show(frame):
+        try:
+            print(frame.to_markdown(index=False, floatfmt=".4f"))
+        except (ImportError, Exception):
+            print(frame.to_string(index=False))
+
+    print(f"\n{'=' * 100}\n {title.upper()} \n{'=' * 100}")
+    print("R = retain (D_R) directions, F = forget (D_F) directions; reference = Oracle retain directions.")
+    print("Ideal: cos -> 1, angle -> 0, norm ratio -> 1, rel dist / procrustes / gram MAE -> 0.\n")
+    print("Per-method summary (mean ± std over seeds):")
+    _show(agg_fmt)
+    print("\nPer-run detail:")
+    _show(df)
+    print(f"\n{'=' * 100}\n")
+
+    if save_csv_path:
+        os.makedirs(os.path.dirname(save_csv_path), exist_ok=True)
+        df.to_csv(save_csv_path, index=False)
+        agg_fmt.to_csv(save_csv_path.replace(".csv", "_by_method.csv"), index=False)
+        print(f"Geometry summary saved to: {save_csv_path}")
+    return agg_fmt

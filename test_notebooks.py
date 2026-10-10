@@ -323,3 +323,130 @@ def test_mia_computation_smoke():
     assert 0.0 <= mia_res["mia_forget"] <= 1.0
     assert 0.0 <= mia_res["disc_forget"] <= 1.0
     assert 0.0 <= mia_res["indisc_forget"] <= 1.0
+
+
+def test_class_mean_geometry_vs_oracle():
+    """Geometry comparison is rotation-invariant: a rotated copy of the reference matches it exactly."""
+    import numpy as np
+    import torch
+    import torch.nn as nn
+    from torch.utils.data import DataLoader, TensorDataset
+    from experiment_utils import (
+        FullClassifier, ClassifierHead,
+        compute_class_mean_geometry, compare_class_mean_geometry,
+        save_class_mean_geometry, load_oracle_geometry, print_geometry_summary_table,
+    )
+
+    torch.manual_seed(0)
+    D, C = 16, 5
+
+    class LinEncoder(nn.Module):
+        def __init__(self, W):
+            super().__init__()
+            self.W = W
+            self.feature_dim = D
+        def forward(self, x):
+            return x.view(x.size(0), -1) @ self.W
+
+    W_ref = torch.randn(3 * 32 * 32, D)
+    Q, _ = torch.linalg.qr(torch.randn(D, D))  # random orthogonal rotation of the feature basis
+    ref_model = FullClassifier(LinEncoder(W_ref), ClassifierHead(D, C))
+    rot_model = FullClassifier(LinEncoder(W_ref @ Q), ClassifierHead(D, C))
+
+    x_r, y_r = torch.randn(50, 3, 32, 32), torch.arange(50) % C
+    x_f, y_f = torch.randn(20, 3, 32, 32), torch.arange(20) % C
+    r_loader = DataLoader(TensorDataset(x_r, y_r), batch_size=10)
+    f_loader = DataLoader(TensorDataset(x_f, y_f), batch_size=10)
+
+    ref_geom = compute_class_mean_geometry(ref_model, r_loader, f_loader, num_classes=C, device="cpu")
+    assert ref_geom["retain_directions"].shape == (C, D)
+    assert np.allclose(ref_geom["retain_directions"].mean(axis=0), 0.0, atol=1e-6)
+
+    save_class_mean_geometry(ref_geom, "./artifacts/metrics/oracle_geometry_testnet_seed_0.npz")
+    loaded = load_oracle_geometry("testnet", 0, search_dirs=("./artifacts/metrics",))
+
+    rot_geom = compute_class_mean_geometry(rot_model, r_loader, f_loader, num_classes=C, device="cpu")
+    cmp = compare_class_mean_geometry(rot_geom, loaded)
+    assert abs(cmp["retain"]["cos_mean"] - 1.0) < 1e-4
+    assert abs(cmp["retain"]["norm_ratio_mean"] - 1.0) < 1e-4
+    assert cmp["retain"]["procrustes_disparity"] < 1e-6
+    assert cmp["retain"]["gram_cos_mae"] < 1e-5
+    assert "forget" in cmp and len(cmp["forget"]["per_class_cos"]) == C
+
+    # A different encoder must deviate from the reference.
+    other = FullClassifier(LinEncoder(torch.randn(3 * 32 * 32, D)), ClassifierHead(D, C))
+    cmp_other = compare_class_mean_geometry(
+        compute_class_mean_geometry(other, r_loader, f_loader, num_classes=C, device="cpu"), loaded
+    )
+    assert cmp_other["retain"]["procrustes_disparity"] > cmp["retain"]["procrustes_disparity"]
+
+    df = print_geometry_summary_table(
+        [
+            {"method": "rotated", "model_name": "testnet", "seed": 0, "geometry_vs_oracle": cmp},
+            {"method": "other", "model_name": "testnet", "seed": 0, "geometry_vs_oracle": cmp_other},
+        ],
+        save_csv_path="./artifacts/metrics/test_geometry_summary.csv",
+    )
+    assert len(df) == 2
+    assert os.path.exists("./artifacts/metrics/test_geometry_summary_by_method.csv")
+
+
+def test_cmf_head_matches_paper_algorithms():
+    """CMF head = Algorithm 1 (zero bias, frozen) and is rebuilt after every epoch (Algorithm 2) for all methods."""
+    import numpy as np
+    import torch
+    import torch.nn as nn
+    from torch.utils.data import DataLoader, TensorDataset
+    from experiment_utils import FullClassifier, ClassifierHead, extract_features, reconstruct_cmf_head
+    from unlearning_methods import (
+        unlearn_random_label, unlearn_neggrad_plus, unlearn_salun, unlearn_scrub, unlearn_tarun_unsir,
+    )
+
+    C, D = 4, 8
+
+    class Enc(nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.l = nn.Linear(3 * 32 * 32, D)
+            self.feature_dim = D
+        def forward(self, x):
+            return torch.relu(self.l(x.view(x.size(0), -1)))
+
+    x, y = torch.randn(24, 3, 32, 32), torch.arange(24) % C
+    data_loader = DataLoader(TensorDataset(x, y), batch_size=8)
+    r_loader = DataLoader(TensorDataset(x[:16], y[:16]), batch_size=8)
+    f_loader = DataLoader(TensorDataset(x[16:], y[16:]), batch_size=8)
+
+    def expected_head(model):
+        f, t = extract_features(model.encoder, data_loader, device="cpu")
+        mu = np.stack([f[t == c].mean(0) for c in range(C)])          # Eq. 3: class means
+        mu_bar = mu.mean(0)                                            # Eq. 3: mean of class means
+        return (mu - mu_bar) / np.linalg.norm(mu - mu_bar, axis=1, keepdims=True)  # Alg. 1 line 6
+
+    torch.manual_seed(0)
+    model = FullClassifier(Enc(), ClassifierHead(D, C))
+    reconstruct_cmf_head(model, data_loader, num_classes=C, device="cpu")
+    assert np.allclose(model.head.linear.weight.detach().numpy(), expected_head(model), atol=1e-5)
+    assert torch.all(model.head.linear.bias == 0)
+    assert not model.head.linear.weight.requires_grad and not model.head.linear.bias.requires_grad
+
+    runs = {
+        "random_label": lambda m, cb: unlearn_random_label(m, r_loader, f_loader, num_classes=C, lr=1e-2, epochs=2, device="cpu", epoch_end_callback=cb),
+        "neggrad_plus": lambda m, cb: unlearn_neggrad_plus(m, r_loader, f_loader, lr=1e-2, epochs=2, device="cpu", epoch_end_callback=cb),
+        "salun": lambda m, cb: unlearn_salun(m, r_loader, f_loader, num_classes=C, lr=1e-2, epochs=2, device="cpu", epoch_end_callback=cb),
+        "scrub": lambda m, cb: unlearn_scrub(m, r_loader, f_loader, epochs=2, msteps=1, lr=1e-2, device="cpu", epoch_end_callback=cb),
+        "tarun_unsir": lambda m, cb: unlearn_tarun_unsir(m, r_loader, f_loader, num_classes=C, noise_epochs=1, noise_steps=1, impair_batches=1, impair_lr=1e-2, repair_lr=1e-2, device="cpu", epoch_end_callback=cb),
+    }
+    for name, run in runs.items():
+        torch.manual_seed(0)
+        m = FullClassifier(Enc(), ClassifierHead(D, C))
+        reconstruct_cmf_head(m, data_loader, num_classes=C, device="cpu")
+        calls = []
+        def cb(model_):
+            reconstruct_cmf_head(model_, data_loader, num_classes=C, device="cpu")
+            calls.append(1)
+        out = run(m, cb)
+        assert len(calls) == 2, f"{name}: expected 2 per-epoch reconstructions, got {len(calls)}"
+        # Final head must equal Algorithm 1 applied to the final encoder.
+        assert np.allclose(out.head.linear.weight.detach().numpy(), expected_head(out), atol=1e-5), name
+        assert torch.all(out.head.linear.bias == 0), name

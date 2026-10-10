@@ -1,3 +1,4 @@
+from typing import Callable, Optional
 import copy
 import torch
 import torch.nn as nn
@@ -28,7 +29,7 @@ def unlearn_scrub(
     forget_loader: DataLoader,
     epochs: int = 3,
     msteps: int = 2,
-    lr: float = 1e-4,
+    lr: float = 5e-4,
     kd_T: float = 2.0,
     alpha: float = 0.5,
     gamma: float = 1.0,
@@ -36,6 +37,7 @@ def unlearn_scrub(
     weight_decay: float = 5e-4,
     device: str = "cuda",
     retain_finetune: bool = True,
+    epoch_end_callback: Optional[Callable[[nn.Module], None]] = None,
 ) -> nn.Module:
     """
     SCRUB (Student-Teacher Relabeling & Unlearning Bound).
@@ -43,6 +45,8 @@ def unlearn_scrub(
     Source: Kurmanji et al. (Towards Unbounded Machine Unlearning, NeurIPS 2023).
     - Maximizes KL divergence on forget set (for the first msteps epochs): loss = -KL(student, teacher).
     - Minimizes weighted combination on retain set (controlled via retain_finetune, default True).
+    epoch_end_callback(student) is called after every epoch (e.g. CMF head reconstruction, Alg. 2 line 7);
+    the teacher stays the original model.
     """
     model.to(device)
     teacher = copy.deepcopy(model).eval()
@@ -92,5 +96,9 @@ def unlearn_scrub(
                 optimizer.zero_grad()
                 loss_retain.backward()
                 optimizer.step()
+
+        if epoch_end_callback is not None:
+            epoch_end_callback(student)
+            student.train()
 
     return student
