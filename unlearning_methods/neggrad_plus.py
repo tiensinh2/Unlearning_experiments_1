@@ -10,7 +10,7 @@ def unlearn_neggrad_plus(
     model: nn.Module,
     retain_loader: DataLoader,
     forget_loader: DataLoader,
-    alpha: float = 0.95,
+    alpha: float = 0.5,
     lr: float = 1e-4,
     epochs: int = 3,
     momentum: float = 0.9,
