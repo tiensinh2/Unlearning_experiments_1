@@ -1,5 +1,6 @@
-from typing import Callable, Optional
+from typing import Callable, Optional, Sequence
 import copy
+import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -30,11 +31,13 @@ def unlearn_scrub(
     epochs: int = 3,
     msteps: int = 2,
     lr: float = 5e-4,
-    kd_T: float = 2.0,
-    alpha: float = 0.5,
-    gamma: float = 1.0,
+    kd_T: float = 4.0,
+    alpha: float = 0.001,
+    gamma: float = 0.99,
     momentum: float = 0.9,
     weight_decay: float = 5e-4,
+    lr_decay_epochs: Sequence[int] = (3, 5, 9),
+    lr_decay_rate: float = 0.1,
     device: str = "cuda",
     retain_finetune: bool = True,
     epoch_end_callback: Optional[Callable[[nn.Module], None]] = None,
@@ -45,6 +48,8 @@ def unlearn_scrub(
     Source: Kurmanji et al. (Towards Unbounded Machine Unlearning, NeurIPS 2023).
     - Maximizes KL divergence on forget set (for the first msteps epochs): loss = -KL(student, teacher).
     - Minimizes weighted combination on retain set (controlled via retain_finetune, default True).
+    Defaults follow the official large_scale_unlearning.ipynb (lr 5e-4, kd_T 4, gamma 0.99, alpha 0.001,
+    step decay x0.1 after lr_decay_epochs, as in repdistiller `adjust_learning_rate`).
     epoch_end_callback(student) is called after every epoch (e.g. CMF head reconstruction, Alg. 2 line 7);
     the teacher stays the original model.
     """
@@ -59,6 +64,11 @@ def unlearn_scrub(
     optimizer = optim.SGD(trainable_params, lr=lr, momentum=momentum, weight_decay=weight_decay)
 
     for epoch in range(1, epochs + 1):
+        # Step LR decay (repdistiller adjust_learning_rate)
+        steps = int(np.sum(epoch > np.asarray(lr_decay_epochs)))
+        for param_group in optimizer.param_groups:
+            param_group["lr"] = lr * (lr_decay_rate ** steps)
+
         # Phase 1: Maximize divergence on Forget set
         if epoch <= msteps:
             student.train()
