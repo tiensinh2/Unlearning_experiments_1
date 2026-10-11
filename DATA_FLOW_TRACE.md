@@ -4,7 +4,7 @@ This document aggregates the complete executable code tracing the dataset flow, 
 
 ```mermaid
 flowchart TD
-    D0["Data Partitioning (SPLIT_SEED=123)<br/>D_dev -> D_train (42,500) + D_V (7,500)<br/>D_train -> D_R (38,250) + D_F (4,250)<br/>D_T (10,000)"]
+    D0["Data Partitioning (SPLIT_SEED=123)<br/>D_dev -> D_train (40,000) + D_V (10,000)<br/>D_train -> D_R (36,000) + D_F (4,000)<br/>D_T (10,000)"]
     
     S01["01 Original Model Training<br/>Train θ_o on D = D_R ∪ D_F<br/>Early stopping / selection on D_V<br/>Saves: original_{model}_seed_{seed}.pt"]
     
@@ -12,7 +12,7 @@ flowchart TD
     
     S03["03 Standard Machine Unlearning (No CMF)<br/>Load θ_o, unlearn on D_R and D_F<br/>(Random Label, NegGrad+, SalUn, SCRUB, UNSIR)<br/>Saves: baseline_{method}_{model}_seed_{seed}.pt"]
     
-    S04a["04a Static CMF Unlearning<br/>Reconstruct CMF head on D_R once and freeze<br/>Unlearn encoder on D_R and D_F with fixed CMF head<br/>Saves: cmf_04a_{method}_{model}_seed_{seed}.pt"]
+    S04a["04a Static CMF Unlearning<br/>Build frozen CMF head from D = D_R ∪ D_F<br/>Unlearn encoder on D_R and D_F; rebuild CMF head after every epoch<br/>Saves: cmf_04a_{method}_{model}_seed_{seed}.pt"]
     
     S04b["04b Post-Hoc Classifier Alignment<br/>Load 04a checkpoint, freeze encoder (assert invariance)<br/>Fine-tune classifier head on D_R<br/>Saves: cmf_04b_{method}_{model}_seed_{seed}.pt"]
     
@@ -43,9 +43,11 @@ The evaluation framework is strictly separated into three distinct, non-overlapp
    - `lp_test`, `ncc_test`: Out-of-sample representation retention on unseen test set $\mathcal{D}_T$.
    - `illusion_gap_lp`, `illusion_gap_ncc`: $\max(\text{Rep}_F - \text{Out}_F, 0)$.
 3. **Privacy / Membership Inference Attack (MIA)**:
-   - `mia_forget`: AUC-ROC of distinguishing forgotten samples $\mathcal{D}_F$ from unseen non-members ($\mathcal{D}_V$ or $\mathcal{D}_T$).
+   - `mia_forget`: U-MIA accuracy — per-sample losses on $\mathcal{D}_F$ (members) and $\mathcal{D}_V$ (non-members), shuffled and trimmed to equal size, logistic regression with 10-fold stratified CV, mean accuracy (Deep Unlearn §3.2.1).
    - `disc_forget`: Discernibility $|\text{2} \times \text{MIA} - 1| \in [0, 1]$.
    - `indisc_forget`: Indiscernibility $1 - \text{Disc} \in [0, 1]$ (where $1.0$ indicates perfect privacy indistinguishability).
+   - `mia_test`, `disc_test`, `indisc_test`: T-MIA, same attack with $\mathcal{D}_T$ as non-members (computed when `test_eval_loader` is given).
+   - `mia_auc_forget`, `mia_auc_test`: supplementary loss-based ROC-AUC (not used for Disc/Indisc).
 
 ```python
 import os
@@ -62,6 +64,7 @@ from torch.utils.data import DataLoader, Dataset, Subset
 from torchvision import datasets, transforms
 from sklearn.linear_model import LogisticRegression
 from sklearn.metrics import roc_auc_score
+from sklearn.model_selection import StratifiedKFold, cross_val_score
 
 # ---------------------------------------------------------
 # Transforms
@@ -146,8 +149,8 @@ def create_and_persist_splits(
         ds_cls = datasets.CIFAR10 if dataset_name.lower() == "cifar10" else datasets.CIFAR100
         raw_train = ds_cls(root=root, train=True, download=True)
         raw_test = ds_cls(root=root, train=False, download=True)
-        train_size, val_size = 42500, 7500
-        retain_size, forget_size = 38250, 4250
+        train_size, val_size = 40000, 10000      # 80% / 20% of D_dev
+        retain_size, forget_size = 36000, 4000   # 90% / 10% of D
     else:
         raise ValueError(f"Unsupported dataset: {dataset_name}")
 
@@ -178,43 +181,45 @@ def create_and_persist_splits(
 # Membership Inference Attack (MIA) Evaluation
 # ---------------------------------------------------------
 @torch.no_grad()
+def _per_sample_losses(model: nn.Module, loader: DataLoader, device: str = "cuda") -> np.ndarray:
+    model.eval()
+    criterion = nn.CrossEntropyLoss(reduction="none")
+    losses = []
+    for images, targets in loader:
+        images = images.to(device)
+        targets = targets.to(device) if isinstance(targets, torch.Tensor) else torch.tensor(targets, device=device)
+        losses.append(criterion(model(images), targets).cpu().numpy())
+    return np.concatenate(losses) if losses else np.zeros(0)
+
 def compute_mia_metrics(
     model: nn.Module,
     forget_loader: DataLoader,
     nonmember_loader: DataLoader,
-    device: str = "cuda"
+    device: str = "cuda",
+    seed: int = 123,
+    n_folds: int = 10,
 ) -> Dict[str, float]:
-    model.eval()
-    criterion = nn.CrossEntropyLoss(reduction="none")
+    # Deep Unlearn U-MIA: equal-size losses, 10-fold logistic regression, mean accuracy
+    forget_losses = _per_sample_losses(model, forget_loader, device=device)
+    nonmember_losses = _per_sample_losses(model, nonmember_loader, device=device)
 
-    forget_losses, nonmember_losses = [], []
-    for images, targets in forget_loader:
-        images = images.to(device)
-        targets = targets.to(device) if isinstance(targets, torch.Tensor) else torch.tensor(targets, device=device)
-        loss = criterion(model(images), targets)
-        forget_losses.extend(loss.cpu().numpy().tolist())
+    n = min(len(forget_losses), len(nonmember_losses))
+    if n < n_folds:
+        return {"mia_forget": 0.5, "disc_forget": 0.0, "indisc_forget": 1.0, "mia_auc_forget": 0.5}
 
-    for images, targets in nonmember_loader:
-        images = images.to(device)
-        targets = targets.to(device) if isinstance(targets, torch.Tensor) else torch.tensor(targets, device=device)
-        loss = criterion(model(images), targets)
-        nonmember_losses.extend(loss.cpu().numpy().tolist())
+    rng = np.random.default_rng(seed)
+    f = rng.permutation(forget_losses)[:n]
+    nm = rng.permutation(nonmember_losses)[:n]
 
-    if len(forget_losses) == 0 or len(nonmember_losses) == 0:
-        return {"mia_forget": 0.5, "disc_forget": 0.0, "indisc_forget": 1.0}
+    X = np.concatenate([f, nm]).reshape(-1, 1)
+    y = np.concatenate([np.ones(n), np.zeros(n)])
 
-    y_true = np.concatenate([np.ones(len(forget_losses)), np.zeros(len(nonmember_losses))])
-    # Lower loss indicates higher membership likelihood -> score = -loss
-    scores = -np.concatenate([np.array(forget_losses), np.array(nonmember_losses)])
-
-    try:
-        mia = float(roc_auc_score(y_true, scores))
-    except Exception:
-        mia = 0.5
+    cv = StratifiedKFold(n_splits=n_folds, shuffle=True, random_state=seed)
+    mia = float(np.mean(cross_val_score(LogisticRegression(), X, y, cv=cv, scoring="accuracy")))
+    auc = float(roc_auc_score(y, -X[:, 0]))
 
     disc = float(abs(2.0 * mia - 1.0))
-    indisc = float(1.0 - disc)
-    return {"mia_forget": mia, "disc_forget": disc, "indisc_forget": indisc}
+    return {"mia_forget": mia, "disc_forget": disc, "indisc_forget": float(1.0 - disc), "mia_auc_forget": auc}
 
 # ---------------------------------------------------------
 # Comprehensive Evaluation Pipeline Across All Categories
@@ -295,10 +300,17 @@ def evaluate_three_tier_metrics(
         res["lp_test"] = compute_linear_probe_accuracy(train_feats, train_targets, t_feats, t_targets, seed=seed)
         res["ncc_test"] = compute_ncc_accuracy(train_feats, train_targets, t_feats, t_targets, num_classes=num_classes)
 
-    # 3. Privacy / Membership Inference (U-MIA)
-    nm_loader = nonmember_loader if nonmember_loader is not None else retain_eval_loader
-    mia_res = compute_mia_metrics(model, forget_eval_loader, nm_loader, device=device)
-    res.update(mia_res)
+    # 3. Privacy / Membership Inference (U-MIA: D_F vs D_V; T-MIA: D_F vs D_T)
+    if nonmember_loader is None:
+        raise ValueError("nonmember_loader is required for MIA computation (pass D_V).")
+    res.update(compute_mia_metrics(model, forget_eval_loader, nonmember_loader, device=device, seed=seed))
+
+    if test_eval_loader is not None:
+        t_mia = compute_mia_metrics(model, forget_eval_loader, test_eval_loader, device=device, seed=seed)
+        res["mia_test"] = t_mia["mia_forget"]
+        res["disc_test"] = t_mia["disc_forget"]
+        res["indisc_test"] = t_mia["indisc_forget"]
+        res["mia_auc_test"] = t_mia["mia_auc_forget"]
     return res
 ```
 
@@ -421,10 +433,15 @@ train_f_loader = DataLoader(train_f_set, batch_size=256, shuffle=True, num_worke
 model = build_classifier(model_name="resnet18", num_classes=10).to(device)
 model.load_state_dict(torch.load("./artifacts/checkpoints/original_resnet18_seed_0.pt", map_location=device))
 
-# Baseline Unlearning (e.g., SCRUB / SalUn / NegGrad+)
+# Baseline Unlearning (calls exactly as in 03_standard_mu.ipynb)
+# unlearn_random_label(model, train_r_loader, train_f_loader, num_classes=10, lr=0.013, epochs=10, device=device)
+# unlearn_neggrad_plus(model, train_r_loader, train_f_loader, alpha=0.95, lr=0.01, epochs=10, device=device)
+# unlearn_scrub(model, train_r_loader, train_f_loader, epochs=10, msteps=3, lr=5e-4, device=device)
+# unlearn_tarun_unsir(model, train_r_loader, forget_loader=train_f_loader, num_classes=10,
+#                     noise_lr=0.1, noise_epochs=5, noise_steps=8, impair_lr=0.02, repair_lr=0.01, device=device)
 unlearned_model = unlearn_salun(
-    model, retain_loader=train_r_loader, forget_loader=train_f_loader,
-    num_classes=10, threshold=0.5, lr=1e-4, epochs=3, device=device
+    model, train_r_loader, train_f_loader,
+    num_classes=10, threshold=0.5, lr=0.013, epochs=10, device=device
 )
 
 torch.save(unlearned_model.state_dict(), "./artifacts/checkpoints/baseline_salun_resnet18_seed_0.pt")
@@ -444,39 +461,28 @@ test_metrics = evaluate_three_tier_metrics(
 
 ## 4a. Notebook 04a — Static Class-Mean Feature (CMF) Unlearning
 
-In strict **Static CMF**, the classifier head is constructed **once before unlearning** from clean retain centroids on $\mathcal{D}_R$, frozen in-place, and remains fixed during the entire unlearning process. No second reconstruction or post-unlearning head reset is performed.
+The classifier head is replaced by the CMF head (Gao et al., Algorithm 1): weights are the centered, L2-normalized class means of encoder features over $\mathcal{D} = \mathcal{D}_R \cup \mathcal{D}_F$ (eval transforms), bias 0, and the head is frozen w.r.t. gradients. Following Algorithm 2, the head is **rebuilt from $\mathcal{D}$ at the end of every unlearning epoch** via `epoch_end_callback`. No post-unlearning head reset is performed.
 
 ```python
-@torch.no_grad()
-def reconstruct_cmf_head(model, dataloader, num_classes=10, device="cuda"):
-    feats, targets = extract_features(model.encoder, dataloader, device=device)
-    class_means = []
-    for c in range(num_classes):
-        mask = (targets == c)
-        mean = feats[mask].mean(axis=0) if mask.sum() > 0 else np.zeros(feats.shape[1])
-        class_means.append(mean)
-    class_means = np.stack(class_means, axis=0) # [C, D]
-    centered = class_means - class_means.mean(axis=0, keepdims=True)
-    normalized_weights = centered / (np.linalg.norm(centered, axis=1, keepdims=True) + 1e-8)
-    
-    # Assign and freeze static CMF head
-    model.head.linear.weight.data.copy_(torch.tensor(normalized_weights, dtype=torch.float32, device=device))
-    if model.head.linear.bias is not None:
-        model.head.linear.bias.data.zero_()
-        model.head.linear.bias.requires_grad = False
-    model.head.linear.weight.requires_grad = False
+# reconstruct_cmf_head lives in experiment_utils.py:
+#   mu_k = mean features of class k over the loader; mu_bar = mean of present mu_k
+#   w_k = (mu_k - mu_bar) / ||mu_k - mu_bar||; bias = 0; head frozen (requires_grad=False)
+from experiment_utils import reconstruct_cmf_head
 
 # 1. Load θ_o
 model = build_classifier(model_name="resnet18", num_classes=10).to(device)
 model.load_state_dict(torch.load("./artifacts/checkpoints/original_resnet18_seed_0.pt", map_location=device))
 
-# 2. Reconstruct CMF head once before unlearning and freeze
-reconstruct_cmf_head(model, train_r_eval_loader, num_classes=10, device=device)
+# 2. Build CMF head from D = D_R ∪ D_F (eval transforms) and freeze
+cmf_set = IndexedDataset(Subset(raw_train, split_info["train_indices"]), eval_tf)
+cmf_loader = DataLoader(cmf_set, batch_size=256, shuffle=False)
+reconstruct_cmf_head(model, cmf_loader, num_classes=10, device=device)
 
-# 3. Unlearn Encoder with fixed CMF head
+# 3. Unlearn encoder; rebuild CMF head after every epoch (Algorithm 2)
+cmf_callback = lambda m: reconstruct_cmf_head(m, cmf_loader, num_classes=10, device=device)
 unlearned_model = unlearn_scrub(
-    model, retain_loader=train_r_loader, forget_loader=train_f_loader,
-    epochs=3, msteps=2, lr=1e-4, device=device
+    model, train_r_loader, train_f_loader,
+    epochs=10, msteps=3, lr=5e-4, device=device, epoch_end_callback=cmf_callback
 )
 
 # 4. Save 04a Checkpoint (evaluated directly with static CMF head)
@@ -517,8 +523,8 @@ init_encoder_state = copy.deepcopy(model.encoder.state_dict())
 optimizer = optim.SGD(model.head.parameters(), lr=1e-3, momentum=0.9, weight_decay=5e-4)
 criterion = nn.CrossEntropyLoss()
 
-# 3. Fine-tune linear head on clean D_R for 5 epochs
-for epoch in range(1, 6):
+# 3. Fine-tune linear head on clean D_R for 3 epochs (Retain-only FT: epochs=3, lr=1e-3)
+for epoch in range(1, 4):
     model.encoder.eval()
     model.head.train()
     for images, targets in train_r_loader:
@@ -546,8 +552,8 @@ torch.save(model.state_dict(), "./artifacts/checkpoints/cmf_04b_scrub_resnet18_s
 ## 4c. Notebook 04c — 2nd-Stage Adaptive Refinement of 04b
 
 Notebook 04c is defined strictly as:
-$$\text{04b Model} \xrightarrow{\text{freeze 04b head}} \text{Adaptive Encoder Refinement (low-LR)} \to \text{Final Model}$$
-The 04b-aligned head is preserved (frozen) to protect decision boundaries while the encoder undergoes low-LR secondary refinement.
+$$\text{04b Model} \xrightarrow{\text{freeze 04b head}} \text{2nd-Stage Encoder Unlearning} \to \text{Final Model}$$
+The 04b-aligned head is preserved (frozen, no CMF rebuild / no `epoch_end_callback`) while the encoder is unlearned a second time. The method calls currently use the **same hyperparameters as Notebook 03** (not a reduced learning rate).
 
 ```python
 # 1. Load 04b checkpoint
@@ -558,10 +564,10 @@ model.load_state_dict(torch.load("./artifacts/checkpoints/cmf_04b_scrub_resnet18
 for p in model.head.parameters():
     p.requires_grad = False
 
-# 3. Low-LR 2nd-Stage Adaptive Refinement on Encoder
+# 3. 2nd-Stage Encoder Unlearning (same call as Notebook 03)
 unlearned_model = unlearn_scrub(
-    model, retain_loader=train_r_loader, forget_loader=train_f_loader,
-    epochs=2, msteps=2, lr=2e-5, device=device
+    model, train_r_loader, train_f_loader,
+    epochs=10, msteps=3, lr=5e-4, device=device
 )
 
 # 4. Save Final 04c Checkpoint & Evaluate

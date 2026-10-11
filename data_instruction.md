@@ -38,12 +38,12 @@ Full dataset = 60,000
 │
 └── D_dev = 50,000     official training/development set (train=True)
     │
-    ├── D_V = 7,500    validation / MIA non-member reference (15% of D_dev)
+    ├── D_V = 10,000   validation / MIA non-member reference (20% of D_dev)
     │
-    └── D = 42,500     original training data (85% of D_dev)
+    └── D = 40,000     original training data (80% of D_dev)
         │
-        ├── D_R = 38,250   retain set (90% of D)
-        └── D_F = 4,250    forget set (10% of D)
+        ├── D_R = 36,000   retain set (90% of D)
+        └── D_F = 4,000    forget set (10% of D)
 ```
 
 ### Required Mathematical Invariants:
@@ -59,11 +59,13 @@ $$D_T \cap D_R = D_T \cap D_F = D_T \cap D_V = \emptyset$$
 
 | Dataset | Total Size | Retain ($D_R$) | Forget ($D_F$) | Validation ($D_V$) | Test ($D_T$) | Classes | Task Type | Input Size |
 |:---|:---:|:---:|:---:|:---:|:---:|:---:|:---|:---:|
-| **MNIST** | 70,000 | 45,900 | 5,100 | 9,000 | 10,000 | 10 | Handwritten Digits | 32×32 (3-ch) |
-| **FashionMNIST** | 70,000 | 45,900 | 5,100 | 9,000 | 10,000 | 10 | Fashion Items | 32×32 (3-ch) |
-| **CIFAR-10** | 60,000 | 38,250 | 4,250 | 7,500 | 10,000 | 10 | Natural Objects | 32×32 (3-ch) |
-| **CIFAR-100** | 60,000 | 38,250 | 4,250 | 7,500 | 10,000 | 100 | Fine-grained Objects | 32×32 (3-ch) |
-| **UTKFace** | 23,708 | 14,508 | 1,613 | 2,846 | 4,741 | 5 | Age Classification | 224×224 (3-ch) |
+| **MNIST** | 70,000 | 43,200 | 4,800 | 12,000 | 10,000 | 10 | Handwritten Digits | 32×32 (3-ch) |
+| **FashionMNIST** | 70,000 | 43,200 | 4,800 | 12,000 | 10,000 | 10 | Fashion Items | 32×32 (3-ch) |
+| **CIFAR-10** | 60,000 | 36,000 | 4,000 | 10,000 | 10,000 | 10 | Natural Objects | 32×32 (3-ch) |
+| **CIFAR-100** | 60,000 | 36,000 | 4,000 | 10,000 | 10,000 | 100 | Fine-grained Objects | 32×32 (3-ch) |
+| **UTKFace** | 23,708 | 13,657 | 1,517 | 3,793 | 4,741 | 5 | Age Classification | 224×224 (3-ch) |
+
+Split protocol (paper §4): seed 123; $D_{dev}$ → $D$ / $D_V$ = 80% / 20%; $D$ → $D_R$ / $D_F$ = 90% / 10% (uniform). Original models use 10 seeds (`model_seeds = [0..9]`).
 
 ---
 
@@ -81,31 +83,32 @@ $$D_T \cap D_R = D_T \cap D_F = D_T \cap D_V = \emptyset$$
 
 ## 5. Roles of Each Data Subset in the Experiment Pipeline
 
-### A. $D_R$ — Retain Set (38,250 samples)
+### A. $D_R$ — Retain Set (36,000 samples)
 * **Original Model Training:** Part of $D = D_R \cup D_F$.
 * **Oracle Training:** The **sole training dataset** for the oracle reference $\theta_{\text{oracle}}$.
 * **Unlearning Execution:** Training set for retain utility preservation across all unlearning algorithms.
-* **CMF Classifier Construction:** The sole data source used to construct Class-Mean Feature (CMF) centroids.
+* **CMF Classifier Construction:** Together with $D_F$, forms $D = D_R \cup D_F$ (`cmf_loader`, eval transforms) from which the Class-Mean Feature (CMF) head is rebuilt at the end of every unlearning epoch in 04a.
 * **Evaluation:**
   - `output_retain`: Retention accuracy on the retain training set.
   - `lp_retain`, `ncc_retain`: In-sample representation diagnostic.
   - Linear Probe & NCC training: $D_R$ representations are used **exclusively** to train the probe and compute class centroids.
 
-### B. $D_F$ — Forget Set (4,250 samples)
+### B. $D_F$ — Forget Set (4,000 samples)
 * **Original Model Training:** Part of $D = D_R \cup D_F$ (must be in original training to be unlearned).
 * **Oracle Training:** **Strictly excluded** from oracle training.
 * **Unlearning Execution:** Target data passed to unlearning algorithms (e.g. for random labeling, gradient ascent, KL divergence maximization, or error-maximizing noise).
 * **Evaluation:**
   - `output_forget`: Accuracy on forgotten training samples.
   - `lp_forget`, `ncc_forget`: Out-of-sample latent representation unlearning metric.
-  - **U-MIA Member Population:** Evaluated as the member population against non-members $D_V$.
+  - **U-MIA Member Population:** Evaluated as the member population against non-members $D_V$ (U-MIA) and $D_T$ (T-MIA).
 
-### C. $D_V$ — Validation Set (7,500 samples)
+### C. $D_V$ — Validation Set (10,000 samples)
 * **Original & Oracle Training:** Used strictly for checkpoint selection and early stopping.
 * **Unlearning Execution:** Never used for gradient updates.
 * **Evaluation:**
   - **U-MIA Non-Member Population:** Used as the unseen reference population when computing Membership Inference Attack (U-MIA) privacy metrics:
     $$\boxed{\text{MIA: } D_F \text{ (members)} \text{ vs. } D_V \text{ (non-members)}}$$
+    Per-sample cross-entropy losses of both populations are shuffled and trimmed to equal size; a logistic regression is evaluated with 10-fold stratified CV and MIA = mean CV accuracy.
     $$\text{Disc} = |2 \times \text{MIA} - 1|, \quad \text{Indisc} = 1 - \text{Disc}$$
 
 ### D. $D_T$ — Official Test Set (10,000 samples)
@@ -113,7 +116,7 @@ $$D_T \cap D_R = D_T \cap D_F = D_T \cap D_V = \emptyset$$
 * **Evaluation:**
   - `output_test`: Final out-of-sample generalization accuracy.
   - `lp_test`, `ncc_test`: Out-of-sample representation retention.
-  - **Isolation:** $D_T$ is **never** used as the MIA non-member reference in place of $D_V$.
+  - **T-MIA Non-Member Population:** In addition to the $D_V$-based U-MIA, $D_F$ vs. $D_T$ is reported as T-MIA (`mia_test`, `indisc_test`), matching the paper's appendix tables. $D_T$ never replaces $D_V$ for U-MIA.
 
 ---
 
@@ -132,9 +135,13 @@ $$D_T \cap D_R = D_T \cap D_F = D_T \cap D_V = \emptyset$$
 | | `ncc_test` | $D_T$ | Out-of-sample NCC test accuracy |
 | | `illusion_gap_lp` | $D_F$ | $\max(\text{lp\_forget} - \text{output\_forget}, 0)$ |
 | | `illusion_gap_ncc` | $D_F$ | $\max(\text{ncc\_forget} - \text{output\_forget}, 0)$ |
-| **Privacy / U-MIA** | `mia_forget` | $D_F \text{ vs. } D_V$ | AUC-ROC distinguishing $D_F$ (members) from $D_V$ (unseen non-members) |
+| **Privacy / U-MIA** | `mia_forget` | $D_F \text{ vs. } D_V$ | U-MIA: mean 10-fold CV accuracy of a logistic regression on per-sample losses ($D_F$ members vs. $D_V$ non-members, equal-size) |
 | | `disc_forget` | $D_F \text{ vs. } D_V$ | Discernibility: $\|2 \times \text{mia\_forget} - 1\| \in [0, 1]$ |
 | | `indisc_forget` | $D_F \text{ vs. } D_V$ | Indiscernibility: $1 - \text{disc\_forget} \in [0, 1]$ ($1.0$ = ideal privacy) |
+| | `mia_auc_forget` | $D_F \text{ vs. } D_V$ | Supplementary loss-based AUC-ROC (not used for Disc/Indisc) |
+| **Privacy / T-MIA** | `mia_test` | $D_F \text{ vs. } D_T$ | Same attack with $D_T$ as non-members (requires `test_eval_loader`) |
+| | `disc_test`, `indisc_test` | $D_F \text{ vs. } D_T$ | Disc / Indisc from `mia_test` |
+| | `mia_auc_test` | $D_F \text{ vs. } D_T$ | Supplementary AUC-ROC |
 
 ---
 
@@ -172,10 +179,10 @@ metrics = evaluate_three_tier_metrics(
 3. [x] Oracle model $\theta_{\text{oracle}}$ is trained from scratch **strictly on $D_R$**.
 4. [x] Unlearning algorithms receive $\theta_O$, $D_R$, and $D_F$.
 5. [x] Forget metrics are evaluated on $D_F$.
-6. [x] U-MIA strictly compares $D_F$ (members) against $D_V$ (non-members).
+6. [x] U-MIA strictly compares $D_F$ (members) against $D_V$ (non-members); T-MIA additionally compares $D_F$ against $D_T$.
 7. [x] Generalization metrics are strictly evaluated on $D_T$.
 8. [x] $D_T$ is never treated as the forget set.
 9. [x] $D_V$ is never added to $D_F$.
-10. [x] In Static CMF (04a), CMF head is built from $D_R$ once and frozen; no post-unlearning reset.
+10. [x] In Static CMF (04a), the CMF head is frozen w.r.t. gradients and rebuilt from $D = D_R \cup D_F$ at the end of every unlearning epoch (`epoch_end_callback`); no post-unlearning reset.
 11. [x] In Post-Hoc Alignment (04b), encoder is frozen and classifier head is fine-tuned on $D_R$ only.
 12. [x] In Adaptive Refinement (04c), 04b-aligned head is frozen and encoder is refined on $D_R$ and $D_F$.

@@ -297,7 +297,7 @@ def test_evaluate_three_tier_metrics_dataset_separation():
 
 
 def test_mia_computation_smoke():
-    """Verify compute_mia_metrics calculates AUC, Discernibility, and Indiscernibility."""
+    """Verify compute_mia_metrics calculates U-MIA accuracy, Discernibility, and Indiscernibility."""
     import torch
     import torch.nn as nn
     from torch.utils.data import DataLoader, TensorDataset

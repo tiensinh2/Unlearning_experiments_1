@@ -594,7 +594,7 @@ def evaluate_three_tier_metrics(
     # --- Category 3: Privacy / Membership Inference (U-MIA) ---
     # Non-member reference population MUST be D_V (passed via nonmember_loader).
     # Falling back to retain_eval_loader (D_R) would silently compare members against members,
-    # producing ~0.5 AUC and falsely indicating ideal unlearning.  Fail loudly instead.
+    # producing ~0.5 MIA accuracy and falsely indicating ideal unlearning.  Fail loudly instead.
     if nonmember_loader is None:
         raise ValueError(
             "nonmember_loader is required for MIA computation. "

@@ -1,6 +1,6 @@
 ### Notebook 01 — Original Model Training (`01_train_full.ipynb`)
 
-For each seed, construct the deterministic dataset split exactly according to `data_instruction.md`. First separate the official development split `D_dev` from the official test split `D_T`. Then divide `D_dev` into the training set `D` and validation set `D_V`. Finally, partition `D` deterministically into 90% Retain `D_R` and 10% Forget `D_F`. For CIFAR-10/CIFAR-100, this produces `D = 42,500`, `D_V = 7,500`, `D_R = 38,250`, `D_F = 4,250`, and `D_T = 10,000`.
+For each seed, construct the deterministic dataset split exactly according to `data_instruction.md`. First separate the official development split `D_dev` from the official test split `D_T`. Then divide `D_dev` into the training set `D` and validation set `D_V`. Finally, partition `D` deterministically into 90% Retain `D_R` and 10% Forget `D_F`. The `D_dev` → `D` / `D_V` split is 80% / 20% (split seed 123). For CIFAR-10/CIFAR-100, this produces `D = 40,000`, `D_V = 10,000`, `D_R = 36,000`, `D_F = 4,000`, and `D_T = 10,000`.
 
 Persist the complete split configuration, seed, all `D`, `D_V`, `D_R`, `D_F`, and `D_T` indices, and a split summary. Validate that `D_R` and `D_F` are disjoint and completely partition `D`, that `D` and `D_V` are disjoint and completely partition `D_dev`, and that `D_T` is kept separate from `D_dev`. These persisted indices are the single source of truth for all downstream notebooks; no downstream notebook may regenerate or modify the dataset partitions.
 
@@ -119,7 +119,7 @@ Shared rules:
 
 Notes:
 - **04b encoder freeze:** set `requires_grad=False` **and** `encoder.eval()` (BatchNorm statistics otherwise keep changing the features); put only head parameters in the optimizer. Verify invariance directly: encoder `state_dict` identical (or equal hashes) and near-zero feature difference on a fixed validation batch. Do not assert on probe-accuracy differences (probe noise). Because the loop is validation-driven, there is no separate "choose `k` epochs" step. Report before and after: lowering output forget accuracy here is classifier suppression, not extra erasure.
-- **04c 2nd-stage unlearning:** takes the classifier-aligned model from 04b (`cmf_04b_*.pt`), freezes the head parameters, and runs a secondary refined multi-stage encoder training loop with smaller learning rates to further eliminate residual representation leakage.
+- **04c 2nd-stage unlearning:** takes the classifier-aligned model from 04b (`cmf_04b_*.pt`), freezes the head parameters, and runs a second encoder unlearning pass (currently the same method hyperparameters as Notebook 03, without per-epoch CMF rebuild) to further eliminate residual representation leakage.
 
 ---
 

@@ -128,3 +128,21 @@ MODEL_CONFIGS = {
     },
 }
 ```
+
+> **Note:** Deep Unlearn Table 7 uses batch size **128** for UTKFace; this repo currently uses 256 for all datasets.
+
+---
+
+## 4. Unlearning Method Hyperparameters (defaults in `unlearning_methods/`)
+
+All methods start from the original checkpoint $\theta_O$, receive $D_R$ and $D_F$, and run a fixed epoch budget (no hyperparameter search is implemented yet; the paper tunes with Optuna, 3 × 100 trials).
+
+| Method | File | Optimizer | Key hyperparameters |
+|---|---|---|---|
+| Random Label (paper: SRL) | `random_label.py` | SGD, momentum 0.9, wd 5e-4 | `lr=0.013`, `epochs=10` |
+| SalUn | `salun.py` | SGD, momentum 0.9, wd 5e-4 | `lr=0.013`, `epochs=10`, saliency `threshold=0.5` |
+| NegGrad+ | `neggrad_plus.py` | SGD, momentum 0.9, wd 5e-4 | `alpha` (β) `=0.95`, `lr=0.01`, `epochs=10` |
+| SCRUB | `scrub.py` | Adam, wd 0.1 | `lr=5e-4`, `epochs=10`, `msteps=3`, `kd_T=2`, `gamma=1`, `alpha=0.5`, retain batch 32, forget batch 64, lr decay ×0.1 at `[0.5E, 0.8E, 0.9E]` |
+| UNSIR | `tarun_unsir.py` | Adam (noise, impair, repair) | noise: `lr=0.1`, 5 epochs × 8 steps; impair: `lr=0.02`, 1 epoch, 20 batches; repair: `lr=0.01`, 1 epoch |
+
+Every method accepts `epoch_end_callback(model)`, used by 04a to rebuild the CMF head from $D = D_R \cup D_F$ after each epoch.
