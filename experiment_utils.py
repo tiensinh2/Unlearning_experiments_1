@@ -172,7 +172,7 @@ MODEL_CONFIGS = {
         "batch_size": 256,
         "lr": 0.1,
         "models": ["resnet18", "vit11m"],
-        "model_seeds": [0, 1, 2],
+        "model_seeds": [0, 1, 2, 3, 4, 5, 6, 7, 8, 9],
     },
     "cifar100": {
         "unlearners": ["original", "naive"],
@@ -270,10 +270,10 @@ def create_and_persist_splits(
     save_dir: str = "./artifacts/splits",
 ) -> Dict[str, Union[List[int], str, int]]:
     """
-    Creates and persists deterministic dataset split exactly according to data_instruction.md:
-    D_dev -> D (85%, 42500) and D_V (15%, 7500)
-    D -> D_R (90%, 38250) and D_F (10%, 4250)
-    D_T (10000)
+    Creates and persists deterministic dataset split following Deep Unlearn (Cadet et al., arXiv:2410.01276, Sec. 5.1):
+    D_dev -> D (80%) and D_V (20%)        e.g. CIFAR: 40000 / 10000
+    D -> D_R (90%) and D_F (10%)          e.g. CIFAR: 36000 / 4000
+    D_T = official test split
     """
     os.makedirs(save_dir, exist_ok=True)
     split_filename = os.path.join(save_dir, f"{dataset_name}_seed_{seed}_split.json")
@@ -294,23 +294,23 @@ def create_and_persist_splits(
     if dataset_name.lower() == "cifar10":
         raw_train = datasets.CIFAR10(root=root, train=True, download=True)
         raw_test = datasets.CIFAR10(root=root, train=False, download=True)
-        train_size, val_size = 42500, 7500
-        retain_size, forget_size = 38250, 4250
+        train_size, val_size = 40000, 10000
+        retain_size, forget_size = 36000, 4000
     elif dataset_name.lower() == "cifar100":
         raw_train = datasets.CIFAR100(root=root, train=True, download=True)
         raw_test = datasets.CIFAR100(root=root, train=False, download=True)
-        train_size, val_size = 42500, 7500
-        retain_size, forget_size = 38250, 4250
+        train_size, val_size = 40000, 10000
+        retain_size, forget_size = 36000, 4000
     elif dataset_name.lower() == "mnist":
         raw_train = datasets.MNIST(root=root, train=True, download=True)
         raw_test = datasets.MNIST(root=root, train=False, download=True)
-        train_size, val_size = 51000, 9000
-        retain_size, forget_size = 45900, 5100
+        train_size, val_size = 48000, 12000
+        retain_size, forget_size = 43200, 4800
     elif dataset_name.lower() == "fashion_mnist":
         raw_train = datasets.FashionMNIST(root=root, train=True, download=True)
         raw_test = datasets.FashionMNIST(root=root, train=False, download=True)
-        train_size, val_size = 51000, 9000
-        retain_size, forget_size = 45900, 5100
+        train_size, val_size = 48000, 12000
+        retain_size, forget_size = 43200, 4800
     else:
         raise ValueError(f"Unsupported dataset: {dataset_name}")
 
@@ -457,63 +457,67 @@ def compute_ncc_accuracy(
 
 
 @torch.no_grad()
+def _per_sample_losses(model: nn.Module, loader: DataLoader, device: str = "cuda") -> np.ndarray:
+    """Per-sample cross-entropy losses of `model` over `loader`."""
+    model.eval()
+    criterion = nn.CrossEntropyLoss(reduction="none")
+    losses = []
+    for images, targets in loader:
+        images = images.to(device)
+        targets = targets.to(device) if isinstance(targets, torch.Tensor) else torch.tensor(targets, device=device)
+        losses.append(criterion(model(images), targets).cpu().numpy())
+    return np.concatenate(losses) if losses else np.zeros(0)
+
+
 def compute_mia_metrics(
     model: nn.Module,
     forget_loader: DataLoader,
     nonmember_loader: DataLoader,
-    device: str = "cuda"
+    device: str = "cuda",
+    seed: int = 123,
+    n_folds: int = 10,
 ) -> Dict[str, float]:
     """
-    Evaluates Membership Inference Attack (MIA) and Indiscernibility metrics on forgotten samples (D_F)
-    versus unseen non-members (D_V or D_T).
-    
-    Computes per-sample cross-entropy loss: s_i = -loss_i.
-    Higher score indicates higher likelihood of training membership.
-    
+    Population-based U-MIA (Deep Unlearn, Cadet et al., arXiv:2410.01276, Sec. 3.2.1 footnote 1 / Sec. 5.5.1):
+      1. compute per-sample CE losses on D_F (members, y=1) and on the non-member set (y=0, D_V or D_T),
+      2. shuffle and trim both sets to equal size,
+      3. train logistic regression on the loss in a 10-fold cross-validation,
+      4. MIA = mean accuracy across folds (0.5 = random guessing).
+    Disc = |2 * MIA - 1|, Indisc = 1 - Disc.
+
     Returns:
-        mia_forget: AUC-ROC of separating D_F from non-members in [0, 1].
-        disc_forget: Discernibility |2 * MIA - 1| in [0, 1].
-        indisc_forget: Indiscernibility 1 - Disc in [0, 1].
+        mia_forget: U-MIA accuracy in [0, 1].
+        disc_forget: Discernibility in [0, 1].
+        indisc_forget: Indiscernibility in [0, 1].
+        mia_auc_forget: ROC-AUC on -loss (extra diagnostic, not used by the paper).
     """
-    model.eval()
-    criterion = nn.CrossEntropyLoss(reduction="none")
+    from sklearn.model_selection import StratifiedKFold, cross_val_score
+    from sklearn.metrics import roc_auc_score
 
-    forget_losses = []
-    for images, targets in forget_loader:
-        images = images.to(device)
-        targets = targets.to(device) if isinstance(targets, torch.Tensor) else torch.tensor(targets, device=device)
-        outputs = model(images)
-        loss = criterion(outputs, targets)
-        forget_losses.extend(loss.cpu().numpy().tolist())
+    forget_losses = _per_sample_losses(model, forget_loader, device=device)
+    nonmember_losses = _per_sample_losses(model, nonmember_loader, device=device)
 
-    nonmember_losses = []
-    for images, targets in nonmember_loader:
-        images = images.to(device)
-        targets = targets.to(device) if isinstance(targets, torch.Tensor) else torch.tensor(targets, device=device)
-        outputs = model(images)
-        loss = criterion(outputs, targets)
-        nonmember_losses.extend(loss.cpu().numpy().tolist())
+    n = min(len(forget_losses), len(nonmember_losses))
+    if n < n_folds:
+        return {"mia_forget": 0.5, "disc_forget": 0.0, "indisc_forget": 1.0, "mia_auc_forget": 0.5}
 
-    if len(forget_losses) == 0 or len(nonmember_losses) == 0:
-        return {"mia_forget": 0.5, "disc_forget": 0.0, "indisc_forget": 1.0}
+    rng = np.random.default_rng(seed)
+    f = rng.permutation(forget_losses)[:n]
+    nm = rng.permutation(nonmember_losses)[:n]
 
-    y_true = np.concatenate([np.ones(len(forget_losses)), np.zeros(len(nonmember_losses))])
-    # Lower loss indicates higher membership likelihood -> score = -loss
-    scores = -np.concatenate([np.array(forget_losses), np.array(nonmember_losses)])
+    X = np.concatenate([f, nm]).reshape(-1, 1)
+    y = np.concatenate([np.ones(n), np.zeros(n)])
 
-    try:
-        from sklearn.metrics import roc_auc_score
-        mia = float(roc_auc_score(y_true, scores))
-    except Exception:
-        mia = 0.5
+    cv = StratifiedKFold(n_splits=n_folds, shuffle=True, random_state=seed)
+    mia = float(np.mean(cross_val_score(LogisticRegression(), X, y, cv=cv, scoring="accuracy")))
+    auc = float(roc_auc_score(y, -X[:, 0]))
 
     disc = float(abs(2.0 * mia - 1.0))
-    indisc = float(1.0 - disc)
-
     return {
         "mia_forget": mia,
         "disc_forget": disc,
-        "indisc_forget": indisc,
+        "indisc_forget": float(1.0 - disc),
+        "mia_auc_forget": auc,
     }
 
 
@@ -542,10 +546,10 @@ def evaluate_three_tier_metrics(
        - lp_test, ncc_test: Out-of-sample representation retention on D_T.
        - illusion_gap_lp, illusion_gap_ncc: Illusion gap metrics on D_F.
        
-    3. Privacy / Membership Inference (MIA):
-       - mia_forget: AUC-ROC of distinguishing D_F from unseen non-members (D_V or D_T).
-       - disc_forget: Discernibility |2 * MIA - 1|.
-       - indisc_forget: Indiscernibility 1 - Disc.
+    3. Privacy / U-MIA (Deep Unlearn: 10-fold logistic regression on equal-size losses, mean accuracy):
+       - mia_forget / disc_forget / indisc_forget: D_F vs D_V (nonmember_loader).
+       - mia_test / disc_test / indisc_test: D_F vs D_T (T-MIA, as reported in the paper's tables),
+         only when test_eval_loader is given.
     """
     # --- Category 1: Accuracy / Utility ---
     out_r = compute_output_accuracy(model, retain_eval_loader, device=device)
@@ -596,8 +600,15 @@ def evaluate_three_tier_metrics(
             "nonmember_loader is required for MIA computation. "
             "Pass the D_V validation loader (never D_R or D_T) as nonmember_loader."
         )
-    mia_res = compute_mia_metrics(model, forget_eval_loader, nonmember_loader, device=device)
+    mia_res = compute_mia_metrics(model, forget_eval_loader, nonmember_loader, device=device, seed=seed)
     res.update(mia_res)
+
+    if test_eval_loader is not None:
+        t_mia = compute_mia_metrics(model, forget_eval_loader, test_eval_loader, device=device, seed=seed)
+        res["mia_test"] = t_mia["mia_forget"]
+        res["disc_test"] = t_mia["disc_forget"]
+        res["indisc_test"] = t_mia["indisc_forget"]
+        res["mia_auc_test"] = t_mia["mia_auc_forget"]
 
     return res
 
@@ -919,8 +930,10 @@ def print_metrics_summary_table(
             "Forget Acc (NCC)": f"{tm.get('ncc_forget', 0.0)*100:.2f}%",
             "Test Acc (NCC)": f"{tm.get('ncc_test', 0.0)*100:.2f}%" if "ncc_test" in tm else "-",
             "NCC Illusion Gap": f"{tm.get('illusion_gap_ncc', 0.0)*100:.2f}%",
-            "MIA (Forget)": f"{tm.get('mia_forget', 0.0)*100:.2f}%" if "mia_forget" in tm else "-",
-            "Indiscernibility": f"{tm.get('indisc_forget', 0.0)*100:.2f}%" if "indisc_forget" in tm else "-",
+            "U-MIA (D_F vs D_V)": f"{tm.get('mia_forget', 0.0)*100:.2f}%" if "mia_forget" in tm else "-",
+            "Indisc (D_V)": f"{tm.get('indisc_forget', 0.0)*100:.2f}%" if "indisc_forget" in tm else "-",
+            "T-MIA (D_F vs D_T)": f"{tm.get('mia_test', 0.0)*100:.2f}%" if "mia_test" in tm else "-",
+            "Indisc (D_T)": f"{tm.get('indisc_test', 0.0)*100:.2f}%" if "indisc_test" in tm else "-",
             "Runtime (s)": f"{runtime:.2f}",
         })
 

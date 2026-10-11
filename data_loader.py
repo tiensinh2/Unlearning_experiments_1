@@ -20,10 +20,10 @@ DATASET_CONFIGS = {
         "in_channels": 3,
         "dev_size": 50000,
         "test_size": 10000,
-        "train_size": 42500,  # 85% of dev
-        "val_size": 7500,     # 15% of dev
-        "retain_size": 38250, # 90% of train
-        "forget_size": 4250,  # 10% of train
+        "train_size": 40000,  # 80% of dev
+        "val_size": 10000,    # 20% of dev
+        "retain_size": 36000, # 90% of train
+        "forget_size": 4000,  # 10% of train
         "mean": [0.4919, 0.4822, 0.4465],
         "std": [0.2023, 0.1994, 0.2010],
     },
@@ -33,10 +33,10 @@ DATASET_CONFIGS = {
         "in_channels": 3,
         "dev_size": 50000,
         "test_size": 10000,
-        "train_size": 42500,  # 85% of dev
-        "val_size": 7500,     # 15% of dev
-        "retain_size": 38250, # 90% of train
-        "forget_size": 4250,  # 10% of train
+        "train_size": 40000,  # 80% of dev
+        "val_size": 10000,    # 20% of dev
+        "retain_size": 36000, # 90% of train
+        "forget_size": 4000,  # 10% of train
         "mean": [0.5071, 0.4865, 0.4409],
         "std": [0.2673, 0.2564, 0.2762],
     },
@@ -46,10 +46,10 @@ DATASET_CONFIGS = {
         "in_channels": 3,
         "dev_size": 60000,
         "test_size": 10000,
-        "train_size": 51000,  # 85% of dev
-        "val_size": 9000,     # 15% of dev
-        "retain_size": 45900, # 90% of train
-        "forget_size": 5100,  # 10% of train
+        "train_size": 48000,  # 80% of dev
+        "val_size": 12000,    # 20% of dev
+        "retain_size": 43200, # 90% of train
+        "forget_size": 4800,  # 10% of train
         "mean": [0.1307, 0.1307, 0.1307],
         "std": [0.3081, 0.3081, 0.3081],
     },
@@ -59,10 +59,10 @@ DATASET_CONFIGS = {
         "in_channels": 3,
         "dev_size": 60000,
         "test_size": 10000,
-        "train_size": 51000,  # 85% of dev
-        "val_size": 9000,     # 15% of dev
-        "retain_size": 45900, # 90% of train
-        "forget_size": 5100,  # 10% of train
+        "train_size": 48000,  # 80% of dev
+        "val_size": 12000,    # 20% of dev
+        "retain_size": 43200, # 90% of train
+        "forget_size": 4800,  # 10% of train
         "mean": [0.2860, 0.2860, 0.2860],
         "std": [0.3560, 0.3560, 0.3560],
     },
@@ -73,10 +73,10 @@ DATASET_CONFIGS = {
         "total_size": 23708,
         "dev_size": 18967,
         "test_size": 4741,
-        "train_size": 16121,
-        "val_size": 2846,
-        "retain_size": 14508,
-        "forget_size": 1613,
+        "train_size": 15174,  # 80% of dev
+        "val_size": 3793,     # 20% of dev
+        "retain_size": 13657, # 90% of train
+        "forget_size": 1517,  # 10% of train
         "mean": [0.485, 0.456, 0.406],
         "std": [0.229, 0.224, 0.225],
     },
