@@ -28,16 +28,17 @@ def unlearn_scrub(
     model: nn.Module,
     retain_loader: DataLoader,
     forget_loader: DataLoader,
-    epochs: int = 3,
-    msteps: int = 2,
+    epochs: int = 10,
+    msteps: int = 3,
     lr: float = 5e-4,
-    kd_T: float = 4.0,
-    alpha: float = 0.001,
-    gamma: float = 0.99,
-    momentum: float = 0.9,
-    weight_decay: float = 5e-4,
-    lr_decay_epochs: Sequence[int] = (3, 5, 9),
+    kd_T: float = 2.0,
+    alpha: float = 0.5,
+    gamma: float = 1.0,
+    weight_decay: float = 0.1,
+    lr_decay_epochs: Optional[Sequence[int]] = None,
     lr_decay_rate: float = 0.1,
+    batch_size: Optional[int] = 32,
+    forget_batch_size: Optional[int] = 64,
     device: str = "cuda",
     retain_finetune: bool = True,
     epoch_end_callback: Optional[Callable[[nn.Module], None]] = None,
@@ -48,8 +49,11 @@ def unlearn_scrub(
     Source: Kurmanji et al. (Towards Unbounded Machine Unlearning, NeurIPS 2023).
     - Maximizes KL divergence on forget set (for the first msteps epochs): loss = -KL(student, teacher).
     - Minimizes weighted combination on retain set (controlled via retain_finetune, default True).
-    Defaults follow the official large_scale_unlearning.ipynb (lr 5e-4, kd_T 4, gamma 0.99, alpha 0.001,
-    step decay x0.1 after lr_decay_epochs, as in repdistiller `adjust_learning_rate`).
+    Defaults follow Deep Unlearn (Cadet et al., arXiv:2410.01276, munl SCRUBUnlearning ORIGINAL_* values,
+    i.e. the official small_scale_unlearning.ipynb): Adam, lr 5e-4, weight_decay 0.1, 10 epochs, msteps 3,
+    kd_T 2, gamma 1, alpha 0.5, retain batch 32, forget batch 64, step decay x0.1 after
+    lr_decay_epochs = [int(0.5E), int(0.8E), int(0.9E)] (repdistiller `adjust_learning_rate`).
+    batch_size / forget_batch_size rebuild the loaders from their datasets (None keeps the given loader).
     epoch_end_callback(student) is called after every epoch (e.g. CMF head reconstruction, Alg. 2 line 7);
     the teacher stays the original model.
     """
@@ -61,7 +65,16 @@ def unlearn_scrub(
     criterion_cls = nn.CrossEntropyLoss()
     criterion_kd = DistillKL(T=kd_T)
     trainable_params = [p for p in student.parameters() if p.requires_grad]
-    optimizer = optim.SGD(trainable_params, lr=lr, momentum=momentum, weight_decay=weight_decay)
+    optimizer = optim.Adam(trainable_params, lr=lr, weight_decay=weight_decay)
+
+    if lr_decay_epochs is None:
+        lr_decay_epochs = [int(epochs * 0.5), int(epochs * 0.8), int(epochs * 0.9)]
+    if batch_size is not None:
+        retain_loader = DataLoader(retain_loader.dataset, batch_size=batch_size, shuffle=True,
+                                   num_workers=retain_loader.num_workers, pin_memory=retain_loader.pin_memory)
+    if forget_batch_size is not None:
+        forget_loader = DataLoader(forget_loader.dataset, batch_size=forget_batch_size, shuffle=True,
+                                   num_workers=forget_loader.num_workers, pin_memory=forget_loader.pin_memory)
 
     for epoch in range(1, epochs + 1):
         # Step LR decay (repdistiller adjust_learning_rate)
