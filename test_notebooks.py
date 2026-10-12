@@ -230,14 +230,21 @@ def test_summary_table_smoke():
             }
         }
     ]
+    second = {**sample_results[0], "seed": 1, "runtime_sec": 14.34,
+              "test_metrics": {**sample_results[0]["test_metrics"], "output_forget": 0.15}}
     df = print_metrics_summary_table(
-        results=sample_results,
+        results=sample_results + [second],
         title="Test Summary",
         save_csv_path="./artifacts/metrics/test_summary.csv"
     )
     assert df is not None
-    assert len(df) == 1
+    assert len(df) == 1  # one row per method/model, aggregated over seeds
+    assert df.loc[0, "Seeds"] == 2
+    # mean 10.00, sample std of (5, 15) = 7.07
+    assert df.loc[0, "Forget Acc (Out)"] == "10.00 ± 7.07"
+    assert df.loc[0, "Runtime (s)"] == "13.34 ± 1.41"
     assert os.path.exists("./artifacts/metrics/test_summary.csv")
+    assert os.path.exists("./artifacts/metrics/test_summary_by_method.csv")
 def test_evaluate_three_tier_metrics_dataset_separation():
     """Verify that evaluate_three_tier_metrics handles probe training, eval, and test correctly."""
     import torch

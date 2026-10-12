@@ -891,67 +891,93 @@ def plot_illusion_gap_comparison(
     plt.show()
 
 
+# (column name, key in test_metrics / validation_metrics, scale) for the summary table.
+_SUMMARY_COLUMNS = [
+    ("Val Acc (Out)", "output_val", 100.0),
+    ("Retain Acc (Out)", "output_retain", 100.0),
+    ("Forget Acc (Out)", "output_forget", 100.0),
+    ("Test Acc (Out)", "output_test", 100.0),
+    ("Retain Acc (LP)", "lp_retain", 100.0),
+    ("Forget Acc (LP)", "lp_forget", 100.0),
+    ("Test Acc (LP)", "lp_test", 100.0),
+    ("LP Illusion Gap", "illusion_gap_lp", 100.0),
+    ("Retain Acc (NCC)", "ncc_retain", 100.0),
+    ("Forget Acc (NCC)", "ncc_forget", 100.0),
+    ("Test Acc (NCC)", "ncc_test", 100.0),
+    ("NCC Illusion Gap", "illusion_gap_ncc", 100.0),
+    ("U-MIA (D_F vs D_V)", "mia_forget", 100.0),
+    ("Indisc (D_V)", "indisc_forget", 100.0),
+    ("T-MIA (D_F vs D_T)", "mia_test", 100.0),
+    ("Indisc (D_T)", "indisc_test", 100.0),
+    ("Runtime (s)", "runtime_sec", 1.0),
+]
+
+
 def print_metrics_summary_table(
     results: List[Dict],
     title: str = "Unlearning Benchmark Metrics Summary",
     save_csv_path: Optional[str] = None,
 ):
     """
-    Renders and prints a consolidated, formatted markdown summary table across
-    methods/models/seeds for all 3 tiers of metrics:
-    - Output Accuracy (Retain / Forget)
-    - Linear Probe (LP) Accuracy (Retain / Forget & Illusion Gap)
-    - Nearest Class Center (NCC) Accuracy (Retain / Forget & Illusion Gap)
-    - Runtime (seconds)
-    Optionally saves the structured summary table to a CSV file.
+    Prints the final summary of a notebook: one row per method/variant and model with
+    mean ± std over seeds (runs) for all 3 tiers of metrics (accuracies/MIA in %), plus runtime.
+
+    If save_csv_path is given, the numeric per-run values are saved to save_csv_path and the
+    formatted mean ± std summary to save_csv_path with suffix "_by_method.csv".
+    Returns the mean ± std summary DataFrame.
     """
     import pandas as pd
 
-    records = []
+    rows = []
     for r in results:
-        method = r.get("method") or r.get("variant") or "unknown"
-        model_name = r.get("model_name", "resnet18")
-        seed = r.get("seed", 0)
-        runtime = r.get("runtime_sec", 0.0)
-        tm = r.get("test_metrics", {})
+        metrics = {**r.get("validation_metrics", {}), **r.get("validation_reference_metrics", {}),
+                   **r.get("test_metrics", {}), "runtime_sec": r.get("runtime_sec")}
+        row = {
+            "Method / Variant": r.get("method") or r.get("variant") or r.get("model_type") or "unknown",
+            "Model": r.get("model_name", "resnet18"),
+            "Seed": r.get("seed", 0),
+        }
+        for col, key, scale in _SUMMARY_COLUMNS:
+            v = metrics.get(key)
+            row[col] = float(v) * scale if v is not None else np.nan
+        rows.append(row)
 
-        records.append({
-            "Method / Variant": method,
-            "Model": model_name,
-            "Seed": seed,
-            "Retain Acc (Out)": f"{tm.get('output_retain', 0.0)*100:.2f}%",
-            "Forget Acc (Out)": f"{tm.get('output_forget', 0.0)*100:.2f}%",
-            "Test Acc (Out)": f"{tm.get('output_test', 0.0)*100:.2f}%" if "output_test" in tm else "-",
-            "Retain Acc (LP)": f"{tm.get('lp_retain', 0.0)*100:.2f}%",
-            "Forget Acc (LP)": f"{tm.get('lp_forget', 0.0)*100:.2f}%",
-            "Test Acc (LP)": f"{tm.get('lp_test', 0.0)*100:.2f}%" if "lp_test" in tm else "-",
-            "LP Illusion Gap": f"{tm.get('illusion_gap_lp', 0.0)*100:.2f}%",
-            "Retain Acc (NCC)": f"{tm.get('ncc_retain', 0.0)*100:.2f}%",
-            "Forget Acc (NCC)": f"{tm.get('ncc_forget', 0.0)*100:.2f}%",
-            "Test Acc (NCC)": f"{tm.get('ncc_test', 0.0)*100:.2f}%" if "ncc_test" in tm else "-",
-            "NCC Illusion Gap": f"{tm.get('illusion_gap_ncc', 0.0)*100:.2f}%",
-            "U-MIA (D_F vs D_V)": f"{tm.get('mia_forget', 0.0)*100:.2f}%" if "mia_forget" in tm else "-",
-            "Indisc (D_V)": f"{tm.get('indisc_forget', 0.0)*100:.2f}%" if "indisc_forget" in tm else "-",
-            "T-MIA (D_F vs D_T)": f"{tm.get('mia_test', 0.0)*100:.2f}%" if "mia_test" in tm else "-",
-            "Indisc (D_T)": f"{tm.get('indisc_test', 0.0)*100:.2f}%" if "indisc_test" in tm else "-",
-            "Runtime (s)": f"{runtime:.2f}",
-        })
+    df = pd.DataFrame(rows)
+    if df.empty:
+        print("No results to summarize.")
+        return df
 
-    df = pd.DataFrame(records)
+    metric_cols = [c for c, _, _ in _SUMMARY_COLUMNS if df[c].notna().any()]
+    group_cols = ["Method / Variant", "Model"]
+    grouped = df.groupby(group_cols, sort=False)
+    agg = grouped[metric_cols].agg(["mean", "std"])
+    summary = pd.DataFrame(index=agg.index)
+    summary["Seeds"] = grouped.size().values
+    for c in metric_cols:
+        summary[c] = [
+            "-" if np.isnan(m) else f"{m:.2f} ± {0.0 if np.isnan(s) else s:.2f}"
+            for m, s in zip(agg[(c, "mean")], agg[(c, "std")])
+        ]
+    summary = summary.reset_index()
+
     print(f"\n{'=' * 100}")
     print(f" {title.upper()} ")
-    print(f"{'=' * 100}\n")
+    print(f"{'=' * 100}")
+    print("Mean ± std over seeds (accuracies / MIA in %, runtime in s).\n")
     try:
-        print(df.to_markdown(index=False))
+        print(summary.to_markdown(index=False))
     except (ImportError, Exception):
-        print(df.to_string(index=False))
+        print(summary.to_string(index=False))
     print(f"\n{'=' * 100}\n")
 
     if save_csv_path:
-        os.makedirs(os.path.dirname(save_csv_path), exist_ok=True)
+        os.makedirs(os.path.dirname(save_csv_path) or ".", exist_ok=True)
         df.to_csv(save_csv_path, index=False)
-        print(f"Summary table saved to: {save_csv_path}")
-    return df
+        by_method_path = save_csv_path.replace(".csv", "_by_method.csv")
+        summary.to_csv(by_method_path, index=False)
+        print(f"Per-run values saved to: {save_csv_path}")
+        print(f"Summary (mean ± std) saved to: {by_method_path}")
+    return summary
 
 
 # ==============================================================================
@@ -1170,8 +1196,6 @@ def print_geometry_summary_table(
     print("Ideal: cos -> 1, angle -> 0, norm ratio -> 1, rel dist / procrustes / gram MAE -> 0.\n")
     print("Per-method summary (mean ± std over seeds):")
     _show(agg_fmt)
-    print("\nPer-run detail:")
-    _show(df)
     print(f"\n{'=' * 100}\n")
 
     if save_csv_path:
