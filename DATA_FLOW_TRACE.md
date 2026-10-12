@@ -438,7 +438,7 @@ model.load_state_dict(torch.load("./artifacts/checkpoints/original_resnet18_seed
 # unlearn_neggrad_plus(model, train_r_loader, train_f_loader, alpha=0.95, lr=0.01, epochs=10, device=device)
 # unlearn_scrub(model, train_r_loader, train_f_loader, epochs=10, msteps=3, lr=5e-4, device=device)
 # unlearn_tarun_unsir(model, train_r_loader, forget_loader=train_f_loader, num_classes=10,
-#                     noise_lr=0.1, noise_epochs=5, noise_steps=8, impair_lr=0.02, repair_lr=0.01, device=device)
+#                     noise_lr=0.1, noise_epochs=5, noise_steps=8, impair_lr=5e-4, repair_lr=0.01, device=device)
 unlearned_model = unlearn_salun(
     model, train_r_loader, train_f_loader,
     num_classes=10, threshold=0.5, lr=0.013, epochs=10, device=device

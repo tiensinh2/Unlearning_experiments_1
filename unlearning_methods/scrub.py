@@ -34,6 +34,7 @@ def unlearn_scrub(
     kd_T: float = 2.0,
     alpha: float = 0.5,
     gamma: float = 1.0,
+    momentum: float = 0.9,
     weight_decay: float = 0.1,
     lr_decay_epochs: Optional[Sequence[int]] = None,
     lr_decay_rate: float = 0.1,
@@ -50,7 +51,8 @@ def unlearn_scrub(
     - Maximizes KL divergence on forget set (for the first msteps epochs): loss = -KL(student, teacher).
     - Minimizes weighted combination on retain set (controlled via retain_finetune, default True).
     Defaults follow Deep Unlearn (Cadet et al., arXiv:2410.01276, munl SCRUBUnlearning ORIGINAL_* values,
-    i.e. the official small_scale_unlearning.ipynb): Adam, lr 5e-4, weight_decay 0.1, 10 epochs, msteps 3,
+    i.e. the official small_scale_unlearning.ipynb), except the optimizer is SGD instead of Adam:
+    SGD, momentum 0.9, lr 5e-4, weight_decay 0.1, 10 epochs, msteps 3,
     kd_T 2, gamma 1, alpha 0.5, retain batch 32, forget batch 64, step decay x0.1 after
     lr_decay_epochs = [int(0.5E), int(0.8E), int(0.9E)] (repdistiller `adjust_learning_rate`).
     batch_size / forget_batch_size rebuild the loaders from their datasets (None keeps the given loader).
@@ -65,7 +67,7 @@ def unlearn_scrub(
     criterion_cls = nn.CrossEntropyLoss()
     criterion_kd = DistillKL(T=kd_T)
     trainable_params = [p for p in student.parameters() if p.requires_grad]
-    optimizer = optim.Adam(trainable_params, lr=lr, weight_decay=weight_decay)
+    optimizer = optim.SGD(trainable_params, lr=lr, momentum=momentum, weight_decay=weight_decay)
 
     if lr_decay_epochs is None:
         lr_decay_epochs = [int(epochs * 0.5), int(epochs * 0.8), int(epochs * 0.9)]

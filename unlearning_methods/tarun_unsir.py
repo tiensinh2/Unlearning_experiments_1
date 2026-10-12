@@ -16,7 +16,7 @@ def unlearn_tarun_unsir(
     noise_lr: float = 0.1,
     noise_epochs: int = 5,
     noise_steps: int = 8,
-    impair_lr: float = 0.02,
+    impair_lr: float = 5e-4,
     impair_epochs: int = 1,
     impair_batches: int = 20,
     repair_lr: float = 0.01,
