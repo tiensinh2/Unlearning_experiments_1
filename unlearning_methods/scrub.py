@@ -30,7 +30,7 @@ def unlearn_scrub(
     forget_loader: DataLoader,
     epochs: int = 10,
     msteps: int = 3,
-    lr: float = 5e-4,
+    lr: float = 5e-3,
     kd_T: float = 2.0,
     alpha: float = 0.5,
     gamma: float = 1.0,
@@ -52,7 +52,7 @@ def unlearn_scrub(
     - Minimizes weighted combination on retain set (controlled via retain_finetune, default True).
     Defaults follow Deep Unlearn (Cadet et al., arXiv:2410.01276, munl SCRUBUnlearning ORIGINAL_* values,
     i.e. the official small_scale_unlearning.ipynb), except the optimizer is SGD instead of Adam:
-    SGD, momentum 0.9, lr 5e-4, weight_decay 0.1, 10 epochs, msteps 3,
+    SGD, momentum 0.9, lr 5e-3, weight_decay 0.1, 10 epochs, msteps 3,
     kd_T 2, gamma 1, alpha 0.5, retain batch 32, forget batch 64, step decay x0.1 after
     lr_decay_epochs = [int(0.5E), int(0.8E), int(0.9E)] (repdistiller `adjust_learning_rate`).
     batch_size / forget_batch_size rebuild the loaders from their datasets (None keeps the given loader).
