@@ -30,13 +30,13 @@ def unlearn_scrub(
     forget_loader: DataLoader,
     epochs: int = 10,
     msteps: int = 3,
-    lr: float = 5e-4,
+    lr: float = 5e-3,
     kd_T: float = 2.0,
     alpha: float = 0.5,
     gamma: float = 1.0,
-    weight_decay: float = 0.1,
+    weight_decay: float = 5e-4,
     momentum: float = 0.9,
-    optim_name: str = "adam",
+    optim_name: str = "sgd",
     lr_decay_epochs: Optional[Sequence[int]] = None,
     lr_decay_rate: float = 0.1,
     batch_size: Optional[int] = 32,
@@ -51,11 +51,11 @@ def unlearn_scrub(
     Source: Kurmanji et al. (Towards Unbounded Machine Unlearning, NeurIPS 2023).
     - Maximizes KL divergence on forget set (for the first msteps epochs): loss = -KL(student, teacher).
     - Minimizes weighted combination on retain set (controlled via retain_finetune, default True).
-    Defaults follow Deep Unlearn (Cadet et al., arXiv:2410.01276, munl SCRUBUnlearning ORIGINAL_* values,
-    i.e. the official small_scale_unlearning.ipynb): Adam, lr 5e-4, weight_decay 0.1, 10 epochs, msteps 3,
+    Default: SGD, lr 5e-3, momentum 0.9, weight_decay 5e-4, 10 epochs, msteps 3,
     kd_T 2, gamma 1, alpha 0.5, retain batch 32, forget batch 64, step decay x0.1 after
     lr_decay_epochs = [int(0.5E), int(0.8E), int(0.9E)] = [5, 8, 9] (repdistiller `adjust_learning_rate`).
-    momentum (0.9) is only used when optim_name="sgd"; it is ignored by Adam, as in the official notebook.
+    Pass optim_name="adam", lr=5e-4, weight_decay=0.1 to match the official small_scale_unlearning.ipynb.
+    momentum is ignored when optim_name="adam".
     batch_size / forget_batch_size rebuild the loaders from their datasets (None keeps the given loader).
     epoch_end_callback(student) is called after every epoch (e.g. CMF head reconstruction, Alg. 2 line 7);
     the teacher stays the original model.
