@@ -30,7 +30,7 @@ def unlearn_scrub(
     forget_loader: DataLoader,
     epochs: int = 10,
     msteps: int = 3,
-    lr: float = 5e-3,
+    lr: float = 5e-4,
     kd_T: float = 2.0,
     alpha: float = 0.5,
     gamma: float = 1.0,
