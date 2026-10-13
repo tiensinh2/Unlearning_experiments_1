@@ -55,6 +55,11 @@ def unlearn_tarun_unsir(
     model.to(device)
     batch_sz = retain_loader.batch_size or 256
 
+    # Infer img_shape from the first batch of forget_loader (overrides the default).
+    if img_shape == (3, 32, 32) and forget_loader is not None:
+        _imgs, _ = next(iter(forget_loader))
+        img_shape = tuple(_imgs.shape[1:])
+
     # ------------------------------------------------------------------
     # Determine classes to forget
     # ------------------------------------------------------------------
