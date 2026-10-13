@@ -1,0 +1,696 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Machine Unlearning — Experiment Details</title>
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+  body {
+    font-family: -apple-system, "Segoe UI", system-ui, sans-serif;
+    background: #fff;
+    color: #1a1a1a;
+    font-size: 15px;
+    line-height: 1.7;
+  }
+
+  /* ── Nav ── */
+  nav {
+    position: fixed; top: 0; left: 0; right: 0; z-index: 99;
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 8px 28px;
+    background: #fff;
+    border-bottom: 1px solid #ddd;
+  }
+  .nav-left  { font-size: 13px; color: #666; }
+  .nav-right { display: flex; align-items: center; gap: 10px; }
+  .nav-right button {
+    border: 1px solid #ccc; background: #f5f5f5; color: #333;
+    padding: 4px 14px; border-radius: 4px; font-size: 13px; cursor: pointer;
+  }
+  .nav-right button:hover { background: #e8e8e8; }
+  #counter { font-size: 13px; color: #888; min-width: 54px; text-align: center; }
+
+  .dot-nav { display: flex; gap: 5px; }
+  .dot { width: 7px; height: 7px; border-radius: 50%; background: #ccc; cursor: pointer; }
+  .dot.on { background: #333; }
+
+  /* ── Slides ── */
+  .deck  { padding-top: 50px; }
+  .slide { display: none; min-height: calc(100vh - 50px); padding: 44px 60px 48px; max-width: 920px; margin: 0 auto; }
+  .slide.active { display: block; }
+
+  /* ── Typography ── */
+  .slide-num { font-size: 11px; color: #aaa; letter-spacing: .08em; text-transform: uppercase; margin-bottom: 6px; }
+  h1  { font-size: 32px; font-weight: 700; line-height: 1.3; margin-bottom: 14px; }
+  h2  { font-size: 22px; font-weight: 700; margin-bottom: 18px; border-bottom: 2px solid #111; padding-bottom: 6px; }
+  h3  { font-size: 15px; font-weight: 700; margin: 18px 0 6px; }
+  h4  { font-size: 13px; font-weight: 700; margin: 12px 0 4px; color: #444; }
+  p   { margin-bottom: 10px; }
+  ul, ol { padding-left: 22px; margin-bottom: 10px; }
+  li  { margin-bottom: 4px; }
+  strong { color: #111; }
+  em { font-style: italic; color: #555; }
+  .muted { color: #777; font-size: 13px; }
+
+  /* ── Section divider ── */
+  hr { border: none; border-top: 1px solid #eee; margin: 20px 0; }
+
+  /* ── Tables ── */
+  table { width: 100%; border-collapse: collapse; font-size: 13px; margin: 12px 0 16px; }
+  th { background: #f0f0f0; padding: 8px 12px; text-align: left; font-size: 12px;
+       border: 1px solid #ddd; color: #333; }
+  td { padding: 7px 12px; border: 1px solid #e5e5e5; color: #333; vertical-align: top; }
+  tr:nth-child(even) td { background: #fafafa; }
+
+  /* ── Code blocks ── */
+  pre {
+    background: #f6f6f6; border: 1px solid #ddd; border-radius: 4px;
+    padding: 14px 16px; font-size: 12px; overflow-x: auto;
+    font-family: "Cascadia Code","Fira Code","Consolas",monospace;
+    line-height: 1.65; color: #222; margin: 10px 0 16px;
+    white-space: pre;
+  }
+  code { background: #f0f0f0; padding: 1px 5px; border-radius: 3px; font-size: 12.5px;
+         font-family: "Cascadia Code","Fira Code","Consolas",monospace; }
+
+  /* ── Two-col layout ── */
+  .two-col { display: grid; grid-template-columns: 1fr 1fr; gap: 28px; }
+  .three-col { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 20px; }
+
+  /* ── Bordered box ── */
+  .box { border: 1px solid #ddd; border-radius: 4px; padding: 14px 18px; margin: 12px 0; background: #fafafa; }
+  .box-warn { border-left: 3px solid #e55; background: #fff8f8; }
+  .box-note { border-left: 3px solid #555; background: #f9f9f9; }
+
+  /* ── Tree ── */
+  .tree { font-family: "Cascadia Code","Fira Code","Consolas",monospace; font-size: 13px;
+          line-height: 2; background: #f6f6f6; border: 1px solid #ddd;
+          border-radius: 4px; padding: 14px 18px; margin: 10px 0 14px; }
+
+  /* ── Footer ── */
+  footer { text-align: center; font-size: 11px; color: #bbb;
+           border-top: 1px solid #eee; padding: 14px; margin-top: 12px; }
+</style>
+</head>
+<body>
+
+<nav>
+  <span class="nav-left">Machine Unlearning — Experiment</span>
+  <div class="nav-right">
+    <div class="dot-nav" id="dots"></div>
+    <button id="btn-prev">← Prev</button>
+    <span id="counter">1 / 10</span>
+    <button id="btn-next">Next →</button>
+  </div>
+</nav>
+
+<div class="deck">
+
+<!-- ══════════════ SLIDE 1 — Title & Overview ══════════════ -->
+<div class="slide active" id="s1">
+  <div class="slide-num">Slide 1 / 10</div>
+  <h1>Deep Unlearn: Benchmarking Machine Unlearning<br>for Image Classification</h1>
+  <p>Tái hiện và mở rộng benchmark <strong>Cadet et al., arXiv:2410.01276v2</strong> — đánh giá class-level machine unlearning trên nhiều dataset, model, và seed, với evaluation 3 tầng (output, feature, privacy).</p>
+
+  <hr>
+  <h3>Mục tiêu thí nghiệm</h3>
+  <ul>
+    <li>So sánh các thuật toán unlearning không cần retrain với oracle (retrain từ đầu).</li>
+    <li>Phát hiện <strong>"Illusion of Forgetting"</strong>: model giảm output accuracy trên forget class nhưng feature encoder vẫn giữ thông tin — output accuracy một mình không đủ để đánh giá.</li>
+    <li>Đề xuất cơ chế <strong>Class-Mean Feature (CMF)</strong> buộc head sử dụng class-mean representation, ép encoder phải thực sự xóa feature.</li>
+  </ul>
+
+  <hr>
+  <h3>Phạm vi</h3>
+  <div class="two-col">
+    <div>
+      <h4>Datasets</h4>
+      <ul>
+        <li>MNIST, FashionMNIST (70k, 10 classes)</li>
+        <li>CIFAR-10, CIFAR-100 (60k, 10/100 classes)</li>
+        <li>UTKFace (23.7k, 5 age classes)</li>
+      </ul>
+    </div>
+    <div>
+      <h4>Models &amp; Seeds</h4>
+      <ul>
+        <li>ResNet-18, ViT-11M</li>
+        <li>10 model seeds (0–9), split seed = 123</li>
+        <li>Kết quả report: mean ± std</li>
+      </ul>
+    </div>
+  </div>
+
+  <hr>
+  <h3>Notebook pipeline (7 notebooks)</h3>
+  <p style="font-family:monospace; font-size:13px; line-height:2.2;">
+    NB01 (train original) → NB02 (oracle retrain) → NB03 (MU baselines)<br>
+    &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;↘ NB04a (CMF static) → NB04b (post-hoc align) → NB04c (adaptive CMF)
+  </p>
+</div>
+
+<!-- ══════════════ SLIDE 2 — Dataset Split ══════════════ -->
+<div class="slide" id="s2">
+  <div class="slide-num">Slide 2 / 10</div>
+  <h2>Dataset Split Protocol</h2>
+
+  <h3>Cấu trúc phân tầng (CIFAR-10 / CIFAR-100)</h3>
+  <div class="tree">
+Full dataset = 60,000
+│
+├── D_T  = 10,000   official test set (train=False) — held-out hoàn toàn
+│
+└── D_dev = 50,000  official training/dev set (train=True)
+    │
+    ├── D_V = 10,000   validation / U-MIA non-member ref  (20% of D_dev, split seed 123)
+    │
+    └── D   = 40,000   training set của original model    (80% of D_dev)
+        │
+        ├── D_R = 36,000   retain set  (90% of D, split seed 123)
+        └── D_F =  4,000   forget set  (10% of D, split seed 123)
+  </div>
+
+  <h3>Invariant bắt buộc</h3>
+  <ul>
+    <li><code>D_R ∩ D_F = ∅</code> và <code>D_R ∪ D_F = D</code></li>
+    <li><code>D ∩ D_V = ∅</code> và <code>D ∪ D_V = D_dev</code></li>
+    <li><code>D_T ∩ D_dev = ∅</code> (D_T không bao giờ chạm vào training)</li>
+    <li>D_F phải thuộc D — tức là đã được dùng để train θ_O, mới có thể "unlearn"</li>
+  </ul>
+
+  <h3>Kích thước các dataset</h3>
+  <table>
+    <thead><tr><th>Dataset</th><th>Total</th><th>D_R</th><th>D_F</th><th>D_V</th><th>D_T</th><th>Classes</th><th>Input</th></tr></thead>
+    <tbody>
+      <tr><td>MNIST</td><td>70,000</td><td>43,200</td><td>4,800</td><td>12,000</td><td>10,000</td><td>10</td><td>32×32 (3ch)</td></tr>
+      <tr><td>FashionMNIST</td><td>70,000</td><td>43,200</td><td>4,800</td><td>12,000</td><td>10,000</td><td>10</td><td>32×32 (3ch)</td></tr>
+      <tr><td>CIFAR-10</td><td>60,000</td><td>36,000</td><td>4,000</td><td>10,000</td><td>10,000</td><td>10</td><td>32×32</td></tr>
+      <tr><td>CIFAR-100</td><td>60,000</td><td>36,000</td><td>4,000</td><td>10,000</td><td>10,000</td><td>100</td><td>32×32</td></tr>
+      <tr><td>UTKFace</td><td>23,708</td><td>13,657</td><td>1,517</td><td>3,793</td><td>4,741</td><td>5</td><td>224×224</td></tr>
+    </tbody>
+  </table>
+
+  <h3>Data Augmentation</h3>
+  <table>
+    <thead><tr><th>Dataset</th><th>Train augmentations</th><th>Eval transforms</th><th>Normalization mean / std</th></tr></thead>
+    <tbody>
+      <tr><td>CIFAR-10/100</td><td>RandomCrop 32×32 (pad 4), RandomHFlip (p=0.5)</td><td>Resize 32×32</td><td>[0.4919,0.4822,0.4465] / [0.2023,0.1994,0.2010]</td></tr>
+      <tr><td>MNIST/FashionMNIST</td><td>Grayscale→3ch, Resize 32, RandomHFlip (p=0.5)</td><td>Grayscale→3ch, Resize 32</td><td>[0.1307×3] / [0.3081×3]</td></tr>
+      <tr><td>UTKFace</td><td>Resize 224×224</td><td>Resize 224×224</td><td>[0.485,0.456,0.406] / [0.229,0.224,0.225]</td></tr>
+    </tbody>
+  </table>
+
+  <div class="box box-warn">
+    <strong>Quy tắc cứng:</strong> Split indices được persist sau NB01 và reuse ở tất cả notebook sau. Không downstream notebook nào được regenerate, reshuffle, hoặc sửa split. Đây là single source of truth.
+  </div>
+</div>
+
+<!-- ══════════════ SLIDE 3 — Model & Training Config ══════════════ -->
+<div class="slide" id="s3">
+  <div class="slide-num">Slide 3 / 10</div>
+  <h2>Model &amp; Training Configuration</h2>
+
+  <h3>Architectures</h3>
+  <ul>
+    <li><strong>ResNet-18</strong> — standard CNN backbone, 11M params.</li>
+    <li><strong>ViT-11M</strong> — Vision Transformer tương đương kích thước, 11M params.</li>
+    <li>UTKFace dùng input 224×224; các dataset còn lại dùng 32×32.</li>
+  </ul>
+
+  <h3>Hyperparameters training gốc (NB01 &amp; NB02)</h3>
+  <table>
+    <thead><tr><th>Dataset</th><th>Epochs</th><th>Batch size</th><th>LR</th><th>Optimizer</th><th>Scheduler</th></tr></thead>
+    <tbody>
+      <tr><td>MNIST / FashionMNIST</td><td>50</td><td>256</td><td>0.1</td><td>SGD (momentum=0.9, wd=5e-4)</td><td>CosineAnnealingLR</td></tr>
+      <tr><td>CIFAR-10 / CIFAR-100</td><td>182</td><td>256</td><td>0.1</td><td>SGD (momentum=0.9, wd=5e-4)</td><td>CosineAnnealingLR</td></tr>
+      <tr><td>UTKFace</td><td>50</td><td>256</td><td>0.1</td><td>SGD (momentum=0.9, wd=5e-4)</td><td>CosineAnnealingLR</td></tr>
+    </tbody>
+  </table>
+  <p class="muted">Note: paper Table 7 dùng batch size 128 cho UTKFace; repo này hiện dùng 256 cho tất cả.</p>
+
+  <h3>NB01 — Checkpoint artifacts được lưu</h3>
+  <ul>
+    <li>Original checkpoint <code>original_seed{s}.pt</code></li>
+    <li>Split config: tất cả index của D, D_V, D_R, D_F, D_T + seed + summary</li>
+    <li>Training history, validation metrics, final test metrics</li>
+    <li>Run metadata (timestamp, config hash)</li>
+  </ul>
+
+  <h3>NB02 — Oracle Retrain</h3>
+  <ul>
+    <li>Load exact split từ NB01 (không regenerate).</li>
+    <li>Train fresh model từ scratch <strong>chỉ trên D_R</strong>. D_F không bao giờ được sử dụng.</li>
+    <li>Dùng D_V cho early stopping và checkpoint selection.</li>
+    <li>Đánh giá 3-tier metrics trên val (dùng làm oracle reference cho NB04) và test (final report).</li>
+    <li>Lưu: oracle checkpoint, validation reference metrics, test metrics, training config, split identifiers, run metadata.</li>
+  </ul>
+
+  <div class="box box-note">
+    Oracle không đạt output_forget ≈ 0 ở feature level — LP/NCC forget thường &gt; 0 vì feature transfer giữa các class. Đây là reference, không phải "ground truth zero". Không hard-code ngưỡng "feature forget accuracy ≈ 0" cho oracle.
+  </div>
+</div>
+
+<!-- ══════════════ SLIDE 4 — Unlearning Baselines ══════════════ -->
+<div class="slide" id="s4">
+  <div class="slide-num">Slide 4 / 10</div>
+  <h2>NB03 — Standard Machine Unlearning Baselines</h2>
+
+  <p>Tất cả baseline đều: (1) load θ_O và exact persisted split từ NB01, (2) run unlearning, (3) evaluate bằng cùng 3-tier metrics, (4) <strong>không dùng CMF mechanism</strong>. Kết quả này là non-CMF reference để so sánh với NB04.</p>
+
+  <h3>Hyperparameters các method (default, chưa tune Optuna)</h3>
+  <table>
+    <thead><tr><th>Method</th><th>File</th><th>Optimizer</th><th>Key hyperparameters</th></tr></thead>
+    <tbody>
+      <tr>
+        <td><strong>Random Label (SRL)</strong></td>
+        <td><code>random_label.py</code></td>
+        <td>SGD, mom=0.9, wd=5e-4</td>
+        <td>lr=0.013, epochs=10. Train trên D_F với random labels.</td>
+      </tr>
+      <tr>
+        <td><strong>SalUn</strong></td>
+        <td><code>salun.py</code></td>
+        <td>SGD, mom=0.9, wd=5e-4</td>
+        <td>lr=0.013, epochs=10, saliency threshold=0.5. Mask gradient theo saliency map.</td>
+      </tr>
+      <tr>
+        <td><strong>NegGrad+</strong></td>
+        <td><code>neggrad_plus.py</code></td>
+        <td>SGD, mom=0.9, wd=5e-4</td>
+        <td>alpha(β)=0.95, lr=0.01, epochs=10. Gradient ascent trên D_F + descent trên D_R.</td>
+      </tr>
+      <tr>
+        <td><strong>SCRUB</strong></td>
+        <td><code>scrub.py</code></td>
+        <td>Adam, wd=0.1</td>
+        <td>lr=5e-4, epochs=10, msteps=3, kd_T=2, gamma=1, alpha=0.5. Retain batch=32, forget batch=64. LR decay ×0.1 tại [0.5E, 0.8E, 0.9E] (= epoch 5, 8, 9).</td>
+      </tr>
+      <tr>
+        <td><strong>UNSIR</strong></td>
+        <td><code>tarun_unsir.py</code></td>
+        <td>Adam (3 phase)</td>
+        <td>Noise: lr=0.1, 5 epochs × 8 steps. Impair: lr=5e-4, 1 epoch, 20 batches. Repair: lr=0.01, 1 epoch.</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <div class="box box-note">
+    Paper tune bằng Optuna (3 × 100 trials). Repo này hiện dùng default values trên — chưa implement hyperparameter search.
+  </div>
+
+  <h3>epoch_end_callback</h3>
+  <p>Mỗi method đều accept <code>epoch_end_callback(model)</code>. NB04a sử dụng hook này để <strong>rebuild CMF head</strong> từ D = D_R ∪ D_F sau mỗi epoch unlearning — đây là điểm kết nối giữa NB03 và NB04a.</p>
+
+  <h3>NB03 artifacts</h3>
+  <ul>
+    <li>Unlearned checkpoint per method per seed</li>
+    <li>Method config đầy đủ, validation metrics, final test metrics, runtime</li>
+    <li>Split identifiers + per-run metadata</li>
+  </ul>
+</div>
+
+<!-- ══════════════ SLIDE 5 — CMF Concept ══════════════ -->
+<div class="slide" id="s5">
+  <div class="slide-num">Slide 5 / 10</div>
+  <h2>Class-Mean Feature (CMF) — Ý tưởng cốt lõi</h2>
+
+  <h3>Vấn đề: Illusion of Forgetting</h3>
+  <p>Các baseline (NB03) giảm <strong>output_forget</strong> nhờ thay đổi classifier head — nhưng encoder feature vẫn giữ nguyên thông tin của forget class. Chứng minh: <strong>LP/NCC forget vẫn cao</strong> sau khi output_forget đã xuống thấp → "illusion gap" = max(LP_f − output_f, 0) &gt; 0.</p>
+
+  <h3>Giải pháp: CMF head</h3>
+  <p>Thay vì để classifier head học freely, CMF <strong>ép head phải là class-mean feature head</strong>:</p>
+  <ul>
+    <li>Sau mỗi epoch, tính mean feature của mỗi class từ D = D_R ∪ D_F dùng encoder hiện tại.</li>
+    <li>Set weight của classifier: <code>w_c = mean_feature(class c)</code>.</li>
+    <li>Head bị frozen — chỉ encoder được train.</li>
+    <li>Hệ quả: muốn output_forget thấp, encoder buộc phải thay đổi representation của forget class → xóa feature thực sự.</li>
+  </ul>
+
+  <h3>Ba variant CMF (NB04a → 04b → 04c)</h3>
+  <table>
+    <thead><tr><th></th><th>04a — Static CMF</th><th>04b — Post-hoc Align</th><th>04c — Adaptive CMF</th></tr></thead>
+    <tbody>
+      <tr>
+        <td><strong>Start from</strong></td>
+        <td>θ_O (original_*.pt)</td>
+        <td>best 04a (cmf_04a_*.pt)</td>
+        <td>best 04b (cmf_04b_*.pt)</td>
+      </tr>
+      <tr>
+        <td><strong>Trainable params</strong></td>
+        <td>Encoder only. Head = class-mean features, rebuilt mỗi epoch, frozen.</td>
+        <td>Classifier head only. Encoder hoàn toàn frozen (requires_grad=False AND encoder.eval()).</td>
+        <td>Encoder only. Head reconstructed từ class-mean features, frozen. 2nd-stage unlearning pass.</td>
+      </tr>
+      <tr>
+        <td><strong>Validation score</strong></td>
+        <td>(1−LP_f) + (1−NCC_f) + Acc_retain_val<br><em>→ maximize feature erasure + retain utility</em></td>
+        <td>low output_forget + Acc_retain_val<br><em>→ classifier suppression (feature unchanged by design)</em></td>
+        <td>(1−LP_f) + (1−NCC_f) + Acc_retain_val<br><em>→ same as 04a, applied to 04b checkpoint</em></td>
+      </tr>
+      <tr>
+        <td><strong>Extra checks</strong></td>
+        <td>Eligibility: Acc_retain_val ≥ original_val − δ</td>
+        <td>Encoder state_dict hash identical before/after. Near-zero feature diff trên fixed val batch.</td>
+        <td>Eligibility: Acc_retain_val ≥ original_val − δ</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <div class="box box-note">
+    <strong>04b quan trọng:</strong> Phải set <code>encoder.eval()</code> khi frozen — không chỉ <code>requires_grad=False</code>. BatchNorm statistics sẽ tiếp tục thay đổi nếu để train mode, làm thay đổi feature invisibly. Verify bằng state_dict hash, không phải probe accuracy (probe noise quá lớn).
+  </div>
+</div>
+
+<!-- ══════════════ SLIDE 6 — Shared Training Loop ══════════════ -->
+<div class="slide" id="s6">
+  <div class="slide-num">Slide 6 / 10</div>
+  <h2>Shared Validation-Driven Loop (NB04a/b/c)</h2>
+
+  <p>Tất cả 3 variant dùng cùng engine. Training chia thành nhiều <strong>stages ngắn</strong>. Mỗi stage resume từ <strong>best checkpoint</strong> (không phải last checkpoint). Evaluate trên val mỗi epoch — không bao giờ test.</p>
+
+  <pre>best  = None
+state = start_checkpoint
+
+for stage in stages:
+    if best:
+        state = restore(best.checkpoint)     # resume từ best, không phải last
+
+    no_gain = 0
+    for epoch in range(stage.max_epochs):
+        train_one_epoch(state,
+                        trainable=variant.trainable,
+                        lr=stage.lr)
+
+        m  = evaluate(state, split="val")    # KHÔNG evaluate test ở đây
+        ok = variant.eligible(m)             # retain accuracy constraint
+        s  = variant.score(m)                # weighted validation score
+
+        if ok and (best is None or s > best.score + min_delta):
+            best     = Snapshot(score=s, checkpoint=save(state))
+            no_gain  = 0
+        else:
+            no_gain += 1
+
+        log(stage, epoch, m, s)              # log mọi thứ
+
+        if no_gain >= stage.patience:
+            break                            # next stage
+
+    if variant.stop(best.metrics):
+        break                                # optional early stop toàn bộ
+
+final = best.checkpoint
+report_test(final)                           # test chỉ chạy ĐÚNG MỘT LẦN</pre>
+
+  <h3>Các tham số cần xác định (tune trên val)</h3>
+  <table>
+    <thead><tr><th>Tham số</th><th>Mô tả</th></tr></thead>
+    <tbody>
+      <tr><td><code>stages</code></td><td>Số stage, mỗi stage có max_epochs, patience, lr (stage sau nhỏ hơn)</td></tr>
+      <tr><td><code>min_delta</code></td><td>Phải ≥ 1/N_val_f (metric resolution). Nhỏ hơn là noise, không phải cải thiện.</td></tr>
+      <tr><td><code>δ</code> (eligibility)</td><td>Ngưỡng drop retain accuracy được chấp nhận. Checkpoint không eligible nếu drop quá δ.</td></tr>
+      <tr><td><code>w_e, w_r</code></td><td>Trọng số erasure và retain trong score. Cần state rõ mục tiêu: go below oracle hay match oracle.</td></tr>
+    </tbody>
+  </table>
+
+  <h3>Logging bắt buộc</h3>
+  <ul>
+    <li>Per-epoch: tất cả validation metrics (output, LP, NCC, retain, forget), score, eligibility flag</li>
+    <li>Per-stage: stage number, learning rate, best score tại thời điểm stage bắt đầu</li>
+    <li>Per-snapshot: full config, metrics tại thời điểm save</li>
+    <li>Final: path của best checkpoint, test metrics (chỉ 1 lần)</li>
+  </ul>
+</div>
+
+<!-- ══════════════ SLIDE 7 — 3-Tier Evaluation ══════════════ -->
+<div class="slide" id="s7">
+  <div class="slide-num">Slide 7 / 10</div>
+  <h2>3-Tier Evaluation Protocol</h2>
+
+  <h3>Tier 1 — Output Accuracy (argmax logits)</h3>
+  <table>
+    <thead><tr><th>Metric</th><th>Data split</th><th>Ý nghĩa</th></tr></thead>
+    <tbody>
+      <tr><td><code>output_retain</code></td><td>D_R</td><td>Utility trên retain training data</td></tr>
+      <tr><td><code>output_forget</code></td><td>D_F</td><td>Model còn "nhớ" forget class không?</td></tr>
+      <tr><td><code>output_test</code></td><td>D_T</td><td>Generalization ra ngoài — final report only</td></tr>
+    </tbody>
+  </table>
+
+  <h3>Tier 2 — Feature-Level (Linear Probe &amp; NCC)</h3>
+  <p>Feature extraction: encoder ở <code>eval()</code>, <code>no_grad</code>, không augmentation, cache per checkpoint.</p>
+  <table>
+    <thead><tr><th>Metric</th><th>Data split</th><th>Ý nghĩa</th></tr></thead>
+    <tbody>
+      <tr><td><code>lp_retain</code></td><td>D_R</td><td>In-sample linear probe (probe fit trên D_R features)</td></tr>
+      <tr><td><code>lp_forget</code></td><td>D_F</td><td>Out-of-sample LP — encoder có còn separate forget class không?</td></tr>
+      <tr><td><code>lp_test</code></td><td>D_T</td><td>LP trên test set</td></tr>
+      <tr><td><code>ncc_retain</code></td><td>D_R</td><td>In-sample NCC (centroids từ D_R features)</td></tr>
+      <tr><td><code>ncc_forget</code></td><td>D_F</td><td>Out-of-sample NCC forget accuracy</td></tr>
+      <tr><td><code>ncc_test</code></td><td>D_T</td><td>NCC trên test set</td></tr>
+      <tr><td><code>illusion_gap_lp</code></td><td>D_F</td><td>max(lp_forget − output_forget, 0) — đo mức độ "illusion"</td></tr>
+      <tr><td><code>illusion_gap_ncc</code></td><td>D_F</td><td>max(ncc_forget − output_forget, 0)</td></tr>
+    </tbody>
+  </table>
+  <p class="muted">LP probe: fresh linear classifier, deterministic solver, fixed seed. Fit trên D_R features, evaluate trên split tương ứng.</p>
+
+  <h3>Tier 3 — Privacy: Membership Inference Attack (MIA)</h3>
+  <table>
+    <thead><tr><th>Metric</th><th>Data split</th><th>Ý nghĩa</th></tr></thead>
+    <tbody>
+      <tr><td><code>mia_forget</code> (U-MIA)</td><td>D_F (members) vs D_V (non-members)</td><td>Mean 10-fold stratified CV accuracy của logistic regression trên per-sample loss. Equal-size sau khi trim.</td></tr>
+      <tr><td><code>disc_forget</code></td><td>D_F vs D_V</td><td>|2 × mia_forget − 1| ∈ [0,1]. Cao = dễ phân biệt member/non-member = privacy kém.</td></tr>
+      <tr><td><code>indisc_forget</code></td><td>D_F vs D_V</td><td>1 − disc_forget. 1.0 = ideal privacy (không thể phân biệt).</td></tr>
+      <tr><td><code>mia_auc_forget</code></td><td>D_F vs D_V</td><td>AUC-ROC bổ sung (không dùng để tính Disc/Indisc).</td></tr>
+      <tr><td><code>mia_test</code> (T-MIA)</td><td>D_F vs D_T</td><td>Same attack nhưng D_T thay vì D_V làm non-member (appendix reporting).</td></tr>
+      <tr><td><code>disc_test</code>, <code>indisc_test</code></td><td>D_F vs D_T</td><td>Disc/Indisc từ T-MIA.</td></tr>
+    </tbody>
+  </table>
+
+  <h3>API call</h3>
+  <pre>metrics = evaluate_three_tier_metrics(
+    model              = model,
+    probe_train_loader = train_r_eval_loader,  # D_R: fit LP probe + NCC centroids
+    retain_eval_loader = train_r_eval_loader,  # D_R: output_retain, lp_retain, ncc_retain
+    forget_eval_loader = train_f_eval_loader,  # D_F: output_forget, lp_forget, ncc_forget
+    num_classes        = 10,
+    seed               = 0,
+    device             = device,
+    test_eval_loader   = test_loader,          # D_T: output_test, lp_test, ncc_test
+    nonmember_loader   = val_loader            # D_V: U-MIA non-member population
+)</pre>
+</div>
+
+<!-- ══════════════ SLIDE 8 — Expected Results ══════════════ -->
+<div class="slide" id="s8">
+  <div class="slide-num">Slide 8 / 10</div>
+  <h2>Expected Results &amp; Sanity Checks</h2>
+
+  <h3>Behaviour theo model</h3>
+  <table>
+    <thead><tr><th>Model</th><th>output_retain</th><th>output_forget</th><th>LP/NCC forget</th><th>illusion_gap</th><th>Indisc (privacy)</th></tr></thead>
+    <tbody>
+      <tr>
+        <td><strong>Original (θ_O)</strong></td>
+        <td>High — baseline utility</td>
+        <td>High (model nhớ forget class)</td>
+        <td>High (feature nhớ)</td>
+        <td>≈ 0 (consistent)</td>
+        <td>Thấp (member dễ bị detect)</td>
+      </tr>
+      <tr>
+        <td><strong>Oracle (θ_oracle)</strong></td>
+        <td>High (close to original)</td>
+        <td>≈ 0 (không bao giờ thấy D_F)</td>
+        <td>Trên 0 — dùng làm reference, không phải ground truth zero</td>
+        <td>Dương</td>
+        <td>Cao — lý tưởng</td>
+      </tr>
+      <tr>
+        <td><strong>Baselines NB03</strong></td>
+        <td>Gần original</td>
+        <td>Thấp (hầu hết method)</td>
+        <td>Vẫn cao — encoder chưa thay đổi</td>
+        <td>Lớn — illusion!</td>
+        <td>Trung bình</td>
+      </tr>
+      <tr>
+        <td><strong>04a / 04c (CMF)</strong></td>
+        <td>Trong δ của original</td>
+        <td>Có thể vẫn trên 0</td>
+        <td>Thấp hơn baseline cùng method</td>
+        <td>Giảm so với baseline</td>
+        <td>Cải thiện</td>
+      </tr>
+      <tr>
+        <td><strong>04b Post-hoc</strong></td>
+        <td>Preserved</td>
+        <td>Thấp hơn 04a</td>
+        <td>Không đổi (encoder frozen)</td>
+        <td>Không thay đổi từ 04a</td>
+        <td>Cải thiện nhờ head</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <h3>Pass/fail tiêu chí (relative, không có threshold cố định)</h3>
+  <ul>
+    <li><strong>Original:</strong> output, LP, NCC đều cao và gần nhau trên cả retain và forget.</li>
+    <li><strong>Oracle:</strong> output_forget ≈ 0; LP/NCC forget &gt; 0 và được record làm reference. Không fail nếu LP/NCC &gt; 0.</li>
+    <li><strong>Baselines:</strong> retain gần original. Illusion gap phải vượt margin tự chọn per method.</li>
+    <li><strong>04a/04c:</strong> LP/NCC forget dưới baseline cùng method. Retain trong δ của original. Output forget có thể &gt; 0 — không fail.</li>
+    <li><strong>04b:</strong> output_forget thấp hơn 04a. Encoder state_dict hash identical. LP/NCC không thay đổi so với 04a.</li>
+  </ul>
+
+  <div class="box box-warn">
+    <strong>Không hard-code thresholds:</strong> Không yêu cầu "feature forget ≈ 0" hay "below oracle" làm pass/fail. Oracle LP/NCC forget thường trên 0 vì feature transfer. Mọi so sánh phải là relative so với original và oracle đo được từ runs thực tế.
+  </div>
+</div>
+
+<!-- ══════════════ SLIDE 9 — Critical Rules ══════════════ -->
+<div class="slide" id="s9">
+  <div class="slide-num">Slide 9 / 10</div>
+  <h2>Critical Rules — Không được vi phạm</h2>
+
+  <h3>1. Data integrity</h3>
+  <ul>
+    <li>D_F ⊂ D: forget samples phải đã được dùng trong training θ_O.</li>
+    <li>Oracle: <strong>tuyệt đối không dùng D_F</strong>.</li>
+    <li>D_T: không dùng trong training, unlearning, hoặc model selection — chỉ final report.</li>
+    <li>D_V không được cộng vào D_F. Vai trò D_V = non-member reference, không phải forget data.</li>
+    <li>Split indices persist sau NB01; không downstream notebook nào được regenerate hay modify.</li>
+  </ul>
+
+  <h3>2. Training &amp; evaluation rules</h3>
+  <ul>
+    <li>Test evaluate <strong>đúng một lần duy nhất</strong> trên final selected checkpoint — không trong loop, không để monitor training.</li>
+    <li>Feature extraction: <code>model.eval()</code> + <code>torch.no_grad()</code> + không augmentation.</li>
+    <li>Assert accuracy ∈ [0, 1] trước khi compute bất kỳ score nào.</li>
+    <li>Frozen module: verify bằng <code>state_dict</code> comparison/hash — không chỉ <code>requires_grad</code> flag.</li>
+    <li>04b: set <code>encoder.eval()</code> khi frozen, không chỉ <code>requires_grad=False</code> (BatchNorm issue).</li>
+    <li>Log per-epoch validation metrics và stage transitions; save config của mỗi snapshot.</li>
+  </ul>
+
+  <h3>3. Metric computation</h3>
+  <ul>
+    <li>LP probe fit <strong>chỉ trên D_R features</strong> (deterministic solver, fixed seed); D_V không được dùng để fit probe.</li>
+    <li>NCC centroids tính <strong>chỉ từ D_R features</strong>.</li>
+    <li>U-MIA: D_F (members) vs D_V (non-members) — trim về equal size, 10-fold stratified CV.</li>
+    <li>T-MIA: D_F vs D_T — riêng cho appendix, không thay thế U-MIA.</li>
+    <li><code>min_delta</code> ≥ 1/N_val_f. N_val_f cần đủ lớn để metric có nghĩa (1 sample thay đổi accuracy 1/N).</li>
+  </ul>
+
+  <h3>4. Reporting</h3>
+  <ul>
+    <li>Mean ± std trên tất cả forget combinations và seeds.</li>
+    <li>Report: delta so với original và oracle; runtime per method.</li>
+    <li>Fairness: baselines phải có cùng epoch budget và cùng validation-based selection.</li>
+    <li><strong>Không invent numbers</strong> — mọi con số phải đến từ executed runs.</li>
+  </ul>
+</div>
+
+<!-- ══════════════ SLIDE 10 — Notebook Dependencies & Artifacts ══════════════ -->
+<div class="slide" id="s10">
+  <div class="slide-num">Slide 10 / 10</div>
+  <h2>Notebook Dependencies &amp; Artifact Map</h2>
+
+  <h3>Dependency graph</h3>
+  <pre>NB01 (train original)
+  ├──→ NB02 (oracle retrain)         # dùng split từ NB01, không phụ thuộc θ_O
+  ├──→ NB03 (MU baselines)           # dùng θ_O + split từ NB01
+  └──→ NB04a (CMF static)            # dùng θ_O + split từ NB01
+          └──→ NB04b (post-hoc align) # dùng best NB04a checkpoint
+                  └──→ NB04c (adaptive CMF) # dùng best NB04b checkpoint</pre>
+
+  <h3>Artifact per notebook</h3>
+  <table>
+    <thead><tr><th>Notebook</th><th>Input</th><th>Output artifacts</th></tr></thead>
+    <tbody>
+      <tr>
+        <td>NB01</td>
+        <td>Raw dataset</td>
+        <td><code>original_seed{s}.pt</code>, split indices (D/D_V/D_R/D_F/D_T), training history, 3-tier metrics</td>
+      </tr>
+      <tr>
+        <td>NB02</td>
+        <td>Split từ NB01</td>
+        <td><code>oracle_seed{s}.pt</code>, oracle val metrics (reference cho NB04), oracle test metrics</td>
+      </tr>
+      <tr>
+        <td>NB03</td>
+        <td>θ_O + split từ NB01</td>
+        <td><code>baseline_{method}_seed{s}.pt</code>, per-method metrics, runtime</td>
+      </tr>
+      <tr>
+        <td>NB04a</td>
+        <td>θ_O + split + oracle val metrics</td>
+        <td><code>cmf_04a_seed{s}.pt</code> (best val checkpoint), per-epoch log, test metrics</td>
+      </tr>
+      <tr>
+        <td>NB04b</td>
+        <td><code>cmf_04a_*.pt</code> + split</td>
+        <td><code>cmf_04b_seed{s}.pt</code>, encoder hash verification log, test metrics</td>
+      </tr>
+      <tr>
+        <td>NB04c</td>
+        <td><code>cmf_04b_*.pt</code> + split</td>
+        <td><code>cmf_04c_seed{s}.pt</code>, final test metrics, comparison table</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <h3>Checklist trước khi report</h3>
+  <ul>
+    <li>☐ NB01 split đã persist và validated (D_R ∩ D_F = ∅, D ∩ D_V = ∅, D_T riêng biệt)</li>
+    <li>☐ Oracle (NB02) train hoàn toàn trên D_R, không bao giờ thấy D_F</li>
+    <li>☐ Mỗi baseline/variant đều dùng exact same split từ NB01</li>
+    <li>☐ Test metrics chỉ compute 1 lần trên final checkpoint mỗi notebook</li>
+    <li>☐ 04b encoder hash verified identical</li>
+    <li>☐ Tất cả LP probe và NCC centroid fit trên D_R features, không phải D_V hay D_F</li>
+    <li>☐ MIA dùng D_F vs D_V (U-MIA) và D_F vs D_T (T-MIA), equal-size, 10-fold CV</li>
+    <li>☐ Kết quả report mean ± std trên đủ seeds và forget combinations</li>
+  </ul>
+</div>
+
+</div><!-- /deck -->
+
+<footer>Made with IBM Bob</footer>
+
+<script>
+  const TOTAL = 10;
+  let cur = 0;
+  const slides  = document.querySelectorAll('.slide');
+  const counter = document.getElementById('counter');
+  const dotNav  = document.getElementById('dots');
+
+  for (let i = 0; i < TOTAL; i++) {
+    const d = document.createElement('div');
+    d.className = 'dot' + (i === 0 ? ' on' : '');
+    d.dataset.i = i;
+    dotNav.appendChild(d);
+  }
+  const dots = dotNav.querySelectorAll('.dot');
+  dots.forEach(d => d.addEventListener('click', () => go(+d.dataset.i)));
+
+  function go(n) {
+    slides[cur].classList.remove('active');
+    dots[cur].classList.remove('on');
+    cur = ((n % TOTAL) + TOTAL) % TOTAL;
+    slides[cur].classList.add('active');
+    dots[cur].classList.add('on');
+    counter.textContent = (cur + 1) + ' / ' + TOTAL;
+    window.scrollTo(0, 0);
+  }
+
+  document.getElementById('btn-prev').addEventListener('click', () => go(cur - 1));
+  document.getElementById('btn-next').addEventListener('click', () => go(cur + 1));
+  document.addEventListener('keydown', e => {
+    if (e.key === 'ArrowRight' || e.key === 'ArrowDown') go(cur + 1);
+    if (e.key === 'ArrowLeft'  || e.key === 'ArrowUp')   go(cur - 1);
+  });
+</script>
+</body>
+</html>

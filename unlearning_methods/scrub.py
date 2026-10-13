@@ -35,6 +35,8 @@ def unlearn_scrub(
     alpha: float = 0.5,
     gamma: float = 1.0,
     weight_decay: float = 0.1,
+    momentum: float = 0.9,
+    optim_name: str = "adam",
     lr_decay_epochs: Optional[Sequence[int]] = None,
     lr_decay_rate: float = 0.1,
     batch_size: Optional[int] = 32,
@@ -52,7 +54,8 @@ def unlearn_scrub(
     Defaults follow Deep Unlearn (Cadet et al., arXiv:2410.01276, munl SCRUBUnlearning ORIGINAL_* values,
     i.e. the official small_scale_unlearning.ipynb): Adam, lr 5e-4, weight_decay 0.1, 10 epochs, msteps 3,
     kd_T 2, gamma 1, alpha 0.5, retain batch 32, forget batch 64, step decay x0.1 after
-    lr_decay_epochs = [int(0.4E), int(0.7E), int(0.9E)] (repdistiller `adjust_learning_rate`).
+    lr_decay_epochs = [int(0.5E), int(0.8E), int(0.9E)] = [5, 8, 9] (repdistiller `adjust_learning_rate`).
+    momentum (0.9) is only used when optim_name="sgd"; it is ignored by Adam, as in the official notebook.
     batch_size / forget_batch_size rebuild the loaders from their datasets (None keeps the given loader).
     epoch_end_callback(student) is called after every epoch (e.g. CMF head reconstruction, Alg. 2 line 7);
     the teacher stays the original model.
@@ -65,10 +68,15 @@ def unlearn_scrub(
     criterion_cls = nn.CrossEntropyLoss()
     criterion_kd = DistillKL(T=kd_T)
     trainable_params = [p for p in student.parameters() if p.requires_grad]
-    optimizer = optim.Adam(trainable_params, lr=lr, weight_decay=weight_decay)
+    if optim_name == "adam":
+        optimizer = optim.Adam(trainable_params, lr=lr, weight_decay=weight_decay)
+    elif optim_name == "sgd":
+        optimizer = optim.SGD(trainable_params, lr=lr, momentum=momentum, weight_decay=weight_decay)
+    else:
+        raise ValueError(f"optim_name must be 'adam' or 'sgd', got {optim_name!r}")
 
     if lr_decay_epochs is None:
-        lr_decay_epochs = [int(round(epochs * 0.4)), int(round(epochs * 0.7)), int(round(epochs * 0.9))]
+        lr_decay_epochs = [int(epochs * 0.5), int(epochs * 0.8), int(epochs * 0.9)]
     if batch_size is not None:
         retain_loader = DataLoader(retain_loader.dataset, batch_size=batch_size, shuffle=True,
                                    num_workers=retain_loader.num_workers, pin_memory=retain_loader.pin_memory)
