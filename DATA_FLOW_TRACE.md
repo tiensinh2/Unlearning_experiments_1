@@ -436,7 +436,7 @@ model.load_state_dict(torch.load("./artifacts/checkpoints/original_resnet18_seed
 # Baseline Unlearning (calls exactly as in 03_standard_mu.ipynb)
 # unlearn_random_label(model, train_r_loader, train_f_loader, num_classes=10, lr=0.013, epochs=10, device=device)
 # unlearn_neggrad_plus(model, train_r_loader, train_f_loader, alpha=0.95, lr=0.01, epochs=10, device=device)
-# unlearn_scrub(model, train_r_loader, train_f_loader, epochs=10, msteps=3, lr=1e-4, device=device)
+# unlearn_scrub(model, train_r_loader, train_f_loader, epochs=10, msteps=3, lr=5e-3, device=device)
 # unlearn_tarun_unsir(model, train_r_loader, forget_loader=train_f_loader, num_classes=10,
 #                     noise_lr=0.1, noise_epochs=5, noise_steps=8, impair_lr=5e-4, repair_lr=0.01, device=device)
 unlearned_model = unlearn_salun(
@@ -482,7 +482,7 @@ reconstruct_cmf_head(model, cmf_loader, num_classes=10, device=device)
 cmf_callback = lambda m: reconstruct_cmf_head(m, cmf_loader, num_classes=10, device=device)
 unlearned_model = unlearn_scrub(
     model, train_r_loader, train_f_loader,
-    epochs=10, msteps=3, lr=1e-4, device=device, epoch_end_callback=cmf_callback
+    epochs=10, msteps=3, lr=5e-3, device=device, epoch_end_callback=cmf_callback
 )
 
 # 4. Save 04a Checkpoint (evaluated directly with static CMF head)
@@ -567,7 +567,7 @@ for p in model.head.parameters():
 # 3. 2nd-Stage Encoder Unlearning (same call as Notebook 03)
 unlearned_model = unlearn_scrub(
     model, train_r_loader, train_f_loader,
-    epochs=10, msteps=3, lr=1e-4, device=device
+    epochs=10, msteps=3, lr=5e-3, device=device
 )
 
 # 4. Save Final 04c Checkpoint & Evaluate
