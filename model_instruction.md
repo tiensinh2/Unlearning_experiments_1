@@ -142,7 +142,7 @@ All methods start from the original checkpoint $\theta_O$, receive $D_R$ and $D_
 | Random Label (paper: SRL) | `random_label.py` | SGD, momentum 0.9, wd 5e-4 | `lr=0.013`, `epochs=10` |
 | SalUn | `salun.py` | SGD, momentum 0.9, wd 5e-4 | `lr=0.013`, `epochs=10`, saliency `threshold=0.5` |
 | NegGrad+ | `neggrad_plus.py` | SGD, momentum 0.9, wd 5e-4 | `alpha` (β) `=0.95`, `lr=0.01`, `epochs=10` |
-| SCRUB | `scrub.py` | SGD, momentum 0.9, wd 5e-4 | `lr=1e-3`, `epochs=10`, `msteps=3`, `kd_T=2`, `gamma=1`, `alpha=0.5`, retain batch 32, forget batch 64, lr decay ×0.1 at `[0.5E, 0.8E, 0.9E] (= epoch 5, 8, 9)` |
-| UNSIR | `tarun_unsir.py` | Adam (noise, impair, repair) | noise: `lr=0.1`, 5 epochs × 8 steps; impair: `lr=5e-4`, 1 epoch, 20 batches; repair: `lr=0.01`, 1 epoch |
+| SCRUB | `scrub.py` | SGD, mom=0.649, wd=0.00311 | `lr=0.00651`, `epochs=20`, `msteps=3`, `kd_T=3.89`, `gamma=1.715`, `alpha=0.970`, retain batch 32, forget batch 128, lr decay ×0.1 at `[0.5E, 0.8E, 0.9E]` (Optuna, seed 0) |
+| UNSIR | `tarun_unsir.py` | Adam (noise, impair, repair) | noise: `lr=0.9345`, 2 epochs × 15 steps; impair: `lr=6.64e-5`, 2 epochs, 14 batches; repair: `lr=9.58e-4`, 1 epoch (Optuna, seed 0) |
 
 Every method accepts `epoch_end_callback(model)`, used by 04a to rebuild the CMF head from $D = D_R \cup D_F$ after each epoch.

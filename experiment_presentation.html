@@ -284,20 +284,20 @@ Full dataset = 60,000
       <tr>
         <td><strong>SCRUB</strong></td>
         <td><code>scrub.py</code></td>
-        <td>SGD, mom=0.9, wd=5e-4</td>
-        <td>lr=1e-3, epochs=10, msteps=3, kd_T=2, gamma=1, alpha=0.5. Retain batch=32, forget batch=64. LR decay ×0.1 tại [0.5E, 0.8E, 0.9E] (= epoch 5, 8, 9).</td>
+        <td>SGD, mom=0.649, wd=0.00311</td>
+        <td>lr=0.00651, epochs=20, msteps=3, kd_T=3.89, gamma=1.715, alpha=0.970. Retain batch=32, forget batch=128. LR decay ×0.1 tại [0.5E, 0.8E, 0.9E]. (Optuna seed 0)</td>
       </tr>
       <tr>
         <td><strong>UNSIR</strong></td>
         <td><code>tarun_unsir.py</code></td>
         <td>Adam (3 phase)</td>
-        <td>Noise: lr=0.1, 5 epochs × 8 steps. Impair: lr=5e-4, 1 epoch, 20 batches. Repair: lr=0.01, 1 epoch.</td>
+        <td>Noise: lr=0.9345, 2 epochs × 15 steps. Impair: lr=6.64e-5, 2 epochs, 14 batches. Repair: lr=9.58e-4, 1 epoch. (Optuna seed 0)</td>
       </tr>
     </tbody>
   </table>
 
   <div class="box box-note">
-    Paper tune bằng Optuna (3 × 100 trials). Repo này hiện dùng default values trên — chưa implement hyperparameter search.
+    Paper tune bằng Optuna (3 × 100 trials). Repo này đã tune SCRUB và UNSIR bằng Optuna (30 trials, seed 0) — xem <code>05_optuna_scrub_unsir.ipynb</code>.
   </div>
 
   <h3>epoch_end_callback</h3>
