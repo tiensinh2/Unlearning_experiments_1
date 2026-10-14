@@ -30,7 +30,7 @@ def unlearn_scrub(
     forget_loader: DataLoader,
     epochs: int = 10,
     msteps: int = 3,
-    lr: float = 5e-3,
+    lr: float = 1e-3,
     kd_T: float = 2.0,
     alpha: float = 0.5,
     gamma: float = 1.0,
@@ -51,7 +51,7 @@ def unlearn_scrub(
     Source: Kurmanji et al. (Towards Unbounded Machine Unlearning, NeurIPS 2023).
     - Maximizes KL divergence on forget set (for the first msteps epochs): loss = -KL(student, teacher).
     - Minimizes weighted combination on retain set (controlled via retain_finetune, default True).
-    Default: SGD, lr 5e-3, momentum 0.9, weight_decay 5e-4, 10 epochs, msteps 3,
+    Default: SGD, lr 1e-3, momentum 0.9, weight_decay 5e-4, 10 epochs, msteps 3,
     kd_T 2, gamma 1, alpha 0.5, retain batch 32, forget batch 64, step decay x0.1 after
     lr_decay_epochs = [int(0.5E), int(0.8E), int(0.9E)] = [5, 8, 9] (repdistiller `adjust_learning_rate`).
     Pass optim_name="adam", lr=5e-4, weight_decay=0.1 to match the official small_scale_unlearning.ipynb.
