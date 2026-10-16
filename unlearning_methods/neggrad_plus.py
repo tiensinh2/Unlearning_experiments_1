@@ -78,6 +78,8 @@ def unlearn_neggrad_plus(
 
         if epoch_end_callback is not None:
             epoch_end_callback(model)
-            model.train()
+            for module in model.modules():
+                if any(p.requires_grad for p in module.parameters(recurse=False)):
+                    module.train()
 
     return model

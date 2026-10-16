@@ -130,6 +130,11 @@ def unlearn_scrub(
 
         if epoch_end_callback is not None:
             epoch_end_callback(student)
-            student.train()
+            # Restore train mode only for submodules that have trainable parameters,
+            # so that a frozen encoder (requires_grad=False + encoder.eval() in 04b)
+            # is not accidentally switched back to train mode here.
+            for module in student.modules():
+                if any(p.requires_grad for p in module.parameters(recurse=False)):
+                    module.train()
 
     return student
